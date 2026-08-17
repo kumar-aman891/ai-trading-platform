@@ -1,0 +1,201 @@
+[project]
+name = "ai-trading-platform"
+version = "0.1.0"
+description = "AI-assisted trading platform — workspace root. Not published; coordinates the uv workspace members."
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    # Pinned exactly (not >=) to match .pre-commit-config.yaml's `rev: v0.6.9`
+    # for the ruff-format hook - an unpinned floor let `uv run ruff format`
+    # resolve to a newer ruff than the pre-commit hook, and the two disagreed
+    # on formatting a small number of multi-line assert statements, which
+    # made `ruff format --check` and `pre-commit run` fight each other.
+    "ruff==0.6.9",
+    "mypy>=1.11.2",
+    "pytest>=8.3.3",
+    "pytest-cov>=5.0.0",
+    "import-linter>=2.0",
+    "pre-commit>=3.8.0",
+    # Step 5 (PostgreSQL + Redis infrastructure) test-only dependencies.
+    # Used exclusively by tests/integration/db/ to verify role privileges,
+    # schema isolation, and Redis auth against a real instance
+    # (docker-compose.test.yml). Not a production dependency of any package
+    # in the workspace — no ORM, no repositories, no application code
+    # touches these (persistence/SQLAlchemy work is Step 8, ADR-009).
+    "psycopg[binary]>=3.2",
+    "redis>=5.0",
+    "pyyaml>=6.0",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = [
+    "domain",
+    "platform",
+    "persistence",
+    "backend",
+    "execution/paper",
+    "workers",
+]
+
+# ---------------------------------------------------------------------------
+# Ruff — formatting + linting
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = [
+    "domain/src",
+    "platform/src",
+    "persistence/src",
+    "backend/src",
+    "execution/paper/src",
+    "workers/src",
+    "tests",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "SIM", # simplify
+    "C4",  # comprehensions
+    "RUF", # ruff-specific
+]
+ignore = [
+    "E501", # line length is enforced by the formatter, not the linter
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/**" = ["S101"]
+
+[tool.ruff.format]
+quote-style = "double"
+line-ending = "lf"
+
+# ---------------------------------------------------------------------------
+# mypy — strict, across every Phase 1 package
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_unreachable = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+namespace_packages = true
+explicit_package_bases = true
+plugins = ["pydantic.mypy"]
+mypy_path = [
+    "domain/src",
+    "platform/src",
+    "persistence/src",
+    "backend/src",
+    "execution/paper/src",
+    "workers/src",
+]
+files = [
+    "domain/src",
+    "platform/src",
+    "persistence/src",
+    "backend/src",
+    "execution/paper/src",
+    "workers/src",
+]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "--import-mode=importlib --strict-markers --strict-config -ra"
+markers = [
+    "safety: invariant tests that must never be skipped, xfailed, or removed without an ADR",
+]
+
+[tool.coverage.run]
+branch = true
+source = [
+    "domain/src/atp_domain",
+    "platform/src/atp_platform",
+    "persistence/src/atp_persistence",
+    "backend/src/atp_api",
+    "execution/paper/src/atp_exec_paper",
+    "workers/src/atp_worker",
+]
+
+[tool.coverage.report]
+skip_empty = true
+show_missing = true
+
+# ---------------------------------------------------------------------------
+# import-linter — architecture contracts (see rules/01-architecture.md)
+#
+# Contracts trivially pass today because Phase 1 Step 2 ships empty package
+# stubs with zero import statements. They start enforcing the moment real
+# code lands in Steps 3+, per the approved Phase 1 plan.
+# ---------------------------------------------------------------------------
+[tool.importlinter]
+root_packages = [
+    "atp_domain",
+    "atp_platform",
+    "atp_persistence",
+    "atp_api",
+    "atp_exec_paper",
+    "atp_worker",
+]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Layered architecture — domain is innermost, nothing below it"
+type = "layers"
+layers = [
+    "atp_api | atp_exec_paper | atp_worker",
+    "atp_persistence",
+    "atp_platform",
+    "atp_domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain kernel stays framework-free (rules/01-architecture.md)"
+type = "forbidden"
+source_modules = ["atp_domain"]
+forbidden_modules = [
+    "fastapi",
+    "sqlalchemy",
+    "alembic",
+    "redis",
+    "httpx",
+    "requests",
+    "aiohttp",
+    "pydantic",
+    "atp_api",
+    "atp_exec_paper",
+    "atp_worker",
+    "atp_persistence",
+]
+
+[[tool.importlinter.contracts]]
+name = "Backend never reaches the paper execution gateway directly"
+type = "forbidden"
+source_modules = ["atp_api"]
+forbidden_modules = ["atp_exec_paper"]
+
+[[tool.importlinter.contracts]]
+name = "No Phase 1 service or platform layer holds an outbound HTTP client (no egress — ADR-006)"
+type = "forbidden"
+source_modules = ["atp_api", "atp_exec_paper", "atp_worker", "atp_platform"]
+forbidden_modules = ["httpx", "requests", "aiohttp"]

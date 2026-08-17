@@ -1,0 +1,76 @@
+# Ephemeral integration-test stack (Phase 1 Step 5, item 6). Wholly separate
+# from docker-compose.yml: tmpfs-backed data directories (nothing survives a
+# `down`), no host ports, and a self-contained `test-runner` service so
+# `docker compose -f docker-compose.test.yml run --rm test-runner` is
+# reproducible regardless of what a developer has installed locally.
+#
+# Credentials here come from ops/docker/test.env.example (fixture-only,
+# documented there) via `--env-file`:
+#   docker compose -f docker-compose.test.yml --env-file ops/docker/test.env.example run --rm test-runner
+services:
+  postgres:
+    image: postgres:16
+    tmpfs:
+      - /var/lib/postgresql/data
+    environment:
+      POSTGRES_USER: ${POSTGRES_BOOTSTRAP_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_BOOTSTRAP_PASSWORD:?POSTGRES_BOOTSTRAP_PASSWORD must be set}
+      POSTGRES_DB: ${POSTGRES_DB:-atp_test}
+      ATP_OWNER_PASSWORD: ${ATP_OWNER_PASSWORD:?ATP_OWNER_PASSWORD must be set}
+      ATP_API_PASSWORD: ${ATP_API_PASSWORD:?ATP_API_PASSWORD must be set}
+      ATP_PAPER_EXEC_PASSWORD: ${ATP_PAPER_EXEC_PASSWORD:?ATP_PAPER_EXEC_PASSWORD must be set}
+      ATP_WORKER_PASSWORD: ${ATP_WORKER_PASSWORD:?ATP_WORKER_PASSWORD must be set}
+    volumes:
+      - ./ops/sql:/docker-entrypoint-initdb.d:ro
+    networks:
+      - atp_test_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    # No `ports:` - the test-runner service reaches this by service name on
+    # atp_test_internal; nothing outside the compose network can reach it.
+
+  redis:
+    image: redis:7
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set}
+      --save ""
+      --appendonly no
+    networks:
+      - atp_test_internal
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    # No `ports:` - same reasoning as postgres above.
+
+  test-runner:
+    build:
+      context: .
+      dockerfile: ops/docker/Dockerfile.test
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      TEST_DATABASE_URL: ${TEST_DATABASE_URL:?TEST_DATABASE_URL must be set}
+      TEST_ATP_API_DSN: ${TEST_ATP_API_DSN:?TEST_ATP_API_DSN must be set}
+      TEST_ATP_PAPER_EXEC_DSN: ${TEST_ATP_PAPER_EXEC_DSN:?TEST_ATP_PAPER_EXEC_DSN must be set}
+      TEST_ATP_WORKER_DSN: ${TEST_ATP_WORKER_DSN:?TEST_ATP_WORKER_DSN must be set}
+      TEST_REDIS_URL: ${TEST_REDIS_URL:?TEST_REDIS_URL must be set}
+    networks:
+      - atp_test_internal
+
+networks:
+  atp_test_internal:
+    driver: bridge
+    internal: true

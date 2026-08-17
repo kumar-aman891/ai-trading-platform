@@ -1,0 +1,55 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: ["--maxkb=1024"]
+      - id: check-toml
+      - id: check-yaml
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+
+  # mypy and import-linter run as local hooks via `uv run` so they execute
+  # inside the shared workspace environment (all six packages importable
+  # together), rather than pre-commit's per-hook isolated environment.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (strict)
+        entry: uv run mypy
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      - id: import-linter
+        name: import-linter (architecture contracts)
+        entry: uv run lint-imports
+        language: system
+        pass_filenames: false
+        types: [python]
+
+      - id: no-live-execution
+        name: assert execution/live/ does not exist
+        # Inlined rather than calling `make` - this hook must not depend on
+        # make being installed. `make no-live-check` runs the same test and
+        # is what CI uses (.github/workflows/ci.yml -> make arch-check).
+        entry: "sh -c \"if [ -d execution/live ]; then echo 'FAIL: execution/live exists'; exit 1; fi\""
+        language: system
+        pass_filenames: false
+        always_run: true

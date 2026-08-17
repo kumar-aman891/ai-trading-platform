@@ -1,0 +1,53 @@
+# --- Secrets / environment -------------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+.venv/
+venv/
+.python-version
+
+# --- Tooling caches ------------------------------------------------------------------
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.import_linter_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# --- Node / frontend (deferred until Node tooling is configured) -------------
+node_modules/
+frontend/dist/
+frontend/.vite/
+npm-debug.log*
+
+# --- Database / local dev state ----------------------------------------------
+*.sqlite3
+pgdata/
+*.dump
+
+# --- IDE / OS ------------------------------------------------------------------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Claude Code local state (machine-specific, never shared) ----------------
+.claude/settings.local.json
+
+# --- uv ------------------------------------------------------------------
+# uv.lock IS committed intentionally for reproducible installs; do not ignore it.

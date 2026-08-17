@@ -1,0 +1,145 @@
+-- Bootstraps Phase 1 database roles, schemas, and least-privilege grants.
+-- Executed once, by 01_bootstrap_roles.sh (which supplies the :'...'
+-- password variables), against the database created by POSTGRES_DB.
+-- Idempotent - safe to re-run against an already-bootstrapped database.
+--
+-- Named .sql.tmpl, not .sql, so postgres's docker-entrypoint-initdb.d
+-- auto-scanner does not also try to execute this file directly (it would
+-- fail - the :'atp_owner_password' etc. variables are only ever supplied by
+-- the wrapper script).
+--
+-- Roles created here map 1:1 to service identities (docs/ARCHITECTURE.md
+-- §4, security/THREAT_MODEL.md trust boundaries):
+--   atp_owner       - migration/owner role. Owns core/audit/paper/live
+--                     schemas and everything created inside them. Used only
+--                     by the migration step (Step 6+), never by a running
+--                     service.
+--   atp_api         - atp_api service (backend/).
+--   atp_paper_exec  - atp_exec_paper service (execution/paper/).
+--   atp_worker      - atp_worker service (workers/).
+--
+-- No atp_exec_live / LIVE role exists (ADR-005, ADR-008) - there is no LIVE
+-- execution service in Phase 1 for such a role to belong to.
+--
+-- Grants below are schema-level only. No Phase 1 table exists yet (see
+-- docs/schemas/README.md and this step's own scope note: concrete tables
+-- are created by the migration step, not here). `ALTER DEFAULT PRIVILEGES
+-- FOR ROLE atp_owner` pre-declares what each role receives on tables
+-- atp_owner creates later in that schema, so the migration step does not
+-- need to repeat this wiring. It is intentionally coarse: every role gets
+-- the same access across every table in a schema it can reach at all. The
+-- concrete per-table security boundaries documented in docs/schemas/*.md
+-- (e.g. atp_api is INSERT-only on paper.trade_proposals but read-only on
+-- paper.risk_decisions; atp_paper_exec is the only writer of
+-- paper.order_intents) are narrower than this file grants and are expected
+-- to be applied as per-table REVOKE/GRANT statements in the Step 6+
+-- migration, once those tables exist. That narrowing is deliberately NOT
+-- implemented here - this file's job is schema-level isolation (above all,
+-- that no application role reaches `live` at all), not final per-table ACLs.
+
+-- ---------------------------------------------------------------------------
+-- 1. Roles - LOGIN, never SUPERUSER, never CREATEDB/CREATEROLE.
+-- ---------------------------------------------------------------------------
+
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'atp_owner') THEN
+        CREATE ROLE atp_owner LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'atp_api') THEN
+        CREATE ROLE atp_api LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'atp_paper_exec') THEN
+        CREATE ROLE atp_paper_exec LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+    END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'atp_worker') THEN
+        CREATE ROLE atp_worker LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+    END IF;
+END
+$$;
+
+-- Passwords are (re)applied on every run, from the wrapper script's
+-- environment - never a literal in this file.
+ALTER ROLE atp_owner WITH PASSWORD :'atp_owner_password';
+ALTER ROLE atp_api WITH PASSWORD :'atp_api_password';
+ALTER ROLE atp_paper_exec WITH PASSWORD :'atp_paper_exec_password';
+ALTER ROLE atp_worker WITH PASSWORD :'atp_worker_password';
+
+-- ---------------------------------------------------------------------------
+-- 2. Database-level hardening - revoke PUBLIC's default grants, connect
+--    explicitly, transfer ownership from the bootstrap superuser to
+--    atp_owner.
+-- ---------------------------------------------------------------------------
+
+REVOKE ALL ON DATABASE :"atp_database" FROM PUBLIC;
+REVOKE ALL ON SCHEMA public FROM PUBLIC;
+
+GRANT CONNECT ON DATABASE :"atp_database" TO atp_owner, atp_api, atp_paper_exec, atp_worker;
+
+ALTER DATABASE :"atp_database" OWNER TO atp_owner;
+
+-- ---------------------------------------------------------------------------
+-- 3. Schemas - core, audit, paper, live. All owned by atp_owner.
+-- ---------------------------------------------------------------------------
+
+CREATE SCHEMA IF NOT EXISTS core AUTHORIZATION atp_owner;
+CREATE SCHEMA IF NOT EXISTS audit AUTHORIZATION atp_owner;
+CREATE SCHEMA IF NOT EXISTS paper AUTHORIZATION atp_owner;
+CREATE SCHEMA IF NOT EXISTS live AUTHORIZATION atp_owner;
+
+-- ---------------------------------------------------------------------------
+-- 4. Schema-level USAGE grants.
+--
+-- `live` is deliberately absent from every GRANT below - no application
+-- role receives USAGE on it, so it stays structurally present (it exists,
+-- it can hold tables in a later phase) but wholly inaccessible to every
+-- Phase 1 application role (ADR-005 §5.4/§6).
+-- ---------------------------------------------------------------------------
+
+GRANT USAGE ON SCHEMA core TO atp_api, atp_paper_exec, atp_worker;
+GRANT USAGE ON SCHEMA audit TO atp_api, atp_paper_exec, atp_worker;
+GRANT USAGE ON SCHEMA paper TO atp_api, atp_paper_exec;
+-- atp_worker deliberately receives no USAGE on `paper` - no order-path
+-- privileges of any kind (security/THREAT_MODEL.md trust boundaries).
+
+-- ---------------------------------------------------------------------------
+-- 5. Default privileges for tables atp_owner creates later (Step 6+
+--    migrations). See the module comment above re: per-table narrowing
+--    deferred to that step.
+-- ---------------------------------------------------------------------------
+
+-- core: reference/config/session/kill-switch/job-queue data.
+ALTER DEFAULT PRIVILEGES FOR ROLE atp_owner IN SCHEMA core
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO atp_api;
+ALTER DEFAULT PRIVILEGES FOR ROLE atp_owner IN SCHEMA core
+    GRANT SELECT ON TABLES TO atp_paper_exec;
+ALTER DEFAULT PRIVILEGES FOR ROLE atp_owner IN SCHEMA core
+    GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO atp_worker;
+ALTER DEFAULT PRIVILEGES FOR ROLE atp_owner IN SCHEMA core
+    GRANT USAGE, SELECT ON SEQUENCES TO atp_api, atp_paper_exec, atp_worker;
+
+-- audit: append-only ledger. No role below ever receives UPDATE, DELETE, or
+-- TRUNCATE - append-only is enforced again, independently, at the migration
+-- step by explicit REVOKE plus a rejecting trigger (ADR-010); this file
+-- simply never grants what append-only access does not require.
+ALTER DEFAULT PRIVILEGES FOR ROLE atp_owner IN SCHEMA audit
+    GRANT SELECT, INSERT ON TABLES TO atp_api;
+ALTER DEFAULT PRIVILEGES FOR ROLE atp_owner IN SCHEMA audit
+    GRANT INSERT ON TABLES TO atp_paper_exec;
+ALTER DEFAULT PRIVILEGES FOR ROLE atp_owner IN SCHEMA audit
+    GRANT SELECT, INSERT ON TABLES TO atp_worker;
+ALTER DEFAULT PRIVILEGES FOR ROLE atp_owner IN SCHEMA audit
+    GRANT USAGE, SELECT ON SEQUENCES TO atp_api, atp_paper_exec, atp_worker;
+
+-- paper: execution-path state. atp_worker receives nothing here - it has no
+-- USAGE on the schema at all (step 4 above), so no order-path privileges.
+ALTER DEFAULT PRIVILEGES FOR ROLE atp_owner IN SCHEMA paper
+    GRANT SELECT, INSERT ON TABLES TO atp_api;
+ALTER DEFAULT PRIVILEGES FOR ROLE atp_owner IN SCHEMA paper
+    GRANT SELECT, INSERT, UPDATE ON TABLES TO atp_paper_exec;
+ALTER DEFAULT PRIVILEGES FOR ROLE atp_owner IN SCHEMA paper
+    GRANT USAGE, SELECT ON SEQUENCES TO atp_api, atp_paper_exec;
+
+-- live: no default privileges granted to any application role, matching the
+-- absence of USAGE above. atp_owner retains full rights (it owns the
+-- schema) so a future phase can populate it without a fresh bootstrap step.

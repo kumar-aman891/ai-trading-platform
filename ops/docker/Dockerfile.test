@@ -1,0 +1,25 @@
+# Self-contained test-runner image for docker-compose.test.yml. Bakes the
+# workspace in at build time rather than bind-mounting the repo, so the
+# ephemeral test stack has no dependency on a developer's local checkout
+# state matching what's installed - "no test dependency on a developer's
+# manually configured local Postgres" extends here to "and no dependency on
+# their local Python environment either."
+FROM python:3.12-slim
+
+RUN pip install --no-cache-dir uv
+
+WORKDIR /workspace
+
+COPY pyproject.toml uv.lock ./
+COPY domain ./domain
+COPY platform ./platform
+COPY persistence ./persistence
+COPY backend ./backend
+COPY execution ./execution
+COPY workers ./workers
+COPY tests ./tests
+
+RUN uv sync --all-packages --group dev --frozen
+
+ENTRYPOINT ["uv", "run", "pytest"]
+CMD ["tests/integration", "-v"]

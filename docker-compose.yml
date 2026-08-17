@@ -1,0 +1,92 @@
+# Phase 1 Step 5 infrastructure: PostgreSQL + Redis only.
+#
+# No application-service containers are defined here yet - backend/,
+# execution/paper/, and workers/ have no runnable entrypoint until Step 6+
+# (persistence layer) and beyond exist. Adding them is deliberately out of
+# scope for this file (see docs/ROADMAP.md); the Docker-security items in
+# .claude/rules (non-root, dropped capabilities, read-only root filesystem)
+# apply to *application* services and will be revisited when those
+# containers are actually built.
+#
+# Security posture for both services below (docs/ARCHITECTURE.md §5,
+# security/THREAT_MODEL.md trust boundaries):
+#   - no `ports:` - neither service is reachable from the host, only from
+#     other containers on `atp_internal`
+#   - `atp_internal` is an `internal: true` bridge network - containers
+#     attached to it have no outbound route to the internet either, so this
+#     also enforces "no broker, Kite, MCP, market-data, LLM, or external
+#     network access" structurally, not by convention
+#   - no `privileged`, no `network_mode: host`
+#   - `no-new-privileges` on both containers
+#
+# `cap_drop: [ALL]` and `read_only: true` are deliberately NOT applied to
+# these two vendored images: both entrypoints (postgres's `gosu`-based
+# privilege drop, redis's directory permission fixup) need root-level
+# capabilities during their first-boot init sequence, and this repository
+# has no way to verify a stricter configuration still boots (Docker is
+# unavailable in the environment this file was authored in - see the Step 5
+# completion report). Revisit once a real `docker compose up` can be
+# exercised.
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_BOOTSTRAP_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_BOOTSTRAP_PASSWORD:?POSTGRES_BOOTSTRAP_PASSWORD must be set - see .env.example}
+      POSTGRES_DB: ${POSTGRES_DB:-atp}
+      ATP_OWNER_PASSWORD: ${ATP_OWNER_PASSWORD:?ATP_OWNER_PASSWORD must be set - see .env.example}
+      ATP_API_PASSWORD: ${ATP_API_PASSWORD:?ATP_API_PASSWORD must be set - see .env.example}
+      ATP_PAPER_EXEC_PASSWORD: ${ATP_PAPER_EXEC_PASSWORD:?ATP_PAPER_EXEC_PASSWORD must be set - see .env.example}
+      ATP_WORKER_PASSWORD: ${ATP_WORKER_PASSWORD:?ATP_WORKER_PASSWORD must be set - see .env.example}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Role/schema bootstrap - see ops/sql/01_bootstrap_roles.sh. Read-only:
+      # the container never needs to write back into this directory.
+      - ./ops/sql:/docker-entrypoint-initdb.d:ro
+    networks:
+      - atp_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    # No `ports:` - internal Docker network only, no public Postgres port.
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD must be set - see .env.example}
+    # `--save "" --appendonly no`: no RDB snapshots, no AOF - Redis in Phase 1
+    # is cache/locks/ephemeral-queue only (ADR-002); nothing it holds is
+    # meant to survive a restart, so nothing trading-related can accumulate
+    # as persistent state here even by accident.
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:?REDIS_PASSWORD must be set - see .env.example}
+      --save ""
+      --appendonly no
+      --protected-mode yes
+    networks:
+      - atp_internal
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    security_opt:
+      - no-new-privileges:true
+    # No `ports:` - internal Docker network only, no public Redis port.
+
+networks:
+  atp_internal:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres_data:

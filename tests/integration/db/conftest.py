@@ -3,11 +3,23 @@
 
 Every fixture here requires a live PostgreSQL/Redis instance bootstrapped by
 ops/sql/roles_and_schemas.sql.tmpl - see docker-compose.test.yml and
-ops/docker/test.env.example. When the required TEST_* environment variable
-is unset or the instance is unreachable, fixtures call `pytest.skip` (never
-raise, never fake a pass) so this suite is safe to collect and run in any
-environment, including one with no Docker at all - which is the case in the
-environment this suite was authored in.
+ops/docker/test.env.example.
+
+Two modes, controlled by ATP_REQUIRE_INTEGRATION_STACK (Phase 1 Step 11):
+
+- Unset (the default): when the required TEST_* environment variable is
+  unset or the instance is unreachable, fixtures call `pytest.skip` (never
+  raise, never fake a pass) so this suite stays safe to collect and run in
+  any environment, including one with no Docker at all - which is the case
+  in the environment this suite was authored in. This is the mode a plain
+  local `pytest` run uses.
+- `ATP_REQUIRE_INTEGRATION_STACK=1`: the caller (docker-compose.test.yml's
+  `test-runner` service, via ops/scripts/run_integration_tests.sh, or CI)
+  is asserting the stack must be present. A missing env var or an
+  unreachable instance calls `pytest.fail` instead of `pytest.skip`, so a
+  broken or unreachable stack is reported as a failure rather than as 77
+  quiet skips - see tests/unit/infra/test_integration_stack_gate.py, which
+  proves this switch actually works without needing Docker itself.
 """
 
 from __future__ import annotations
@@ -34,15 +46,26 @@ REDIS_URL_ENV_VAR = "TEST_REDIS_URL"
 
 CONNECT_TIMEOUT_SECONDS = 3
 
+REQUIRE_STACK_ENV_VAR = "ATP_REQUIRE_INTEGRATION_STACK"
+
+
+def _require_stack() -> bool:
+    """Re-read on every call (not module-import-time) so tests can toggle
+    the env var with monkeypatch without needing a reload."""
+    return os.environ.get(REQUIRE_STACK_ENV_VAR) == "1"
+
 
 def _require_dsn(env_var: str) -> str:
     dsn = os.environ.get(env_var)
     if not dsn:
-        pytest.skip(
+        message = (
             f"{env_var} is not set - the Step 5 database security suite requires "
             f"the ephemeral stack in docker-compose.test.yml (see "
-            f"ops/docker/test.env.example). Blocked in this environment, not failing."
+            f"ops/docker/test.env.example)."
         )
+        if _require_stack():
+            pytest.fail(f"{message} {REQUIRE_STACK_ENV_VAR}=1 requires the stack to be present.")
+        pytest.skip(f"{message} Blocked in this environment, not failing.")
     return dsn
 
 
@@ -50,6 +73,11 @@ def _connect(dsn: str, *, label: str) -> psycopg.Connection:
     try:
         return psycopg.connect(dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS)
     except psycopg.OperationalError as exc:
+        if _require_stack():
+            pytest.fail(
+                f"Could not connect as {label}: {exc} "
+                f"({REQUIRE_STACK_ENV_VAR}=1 requires the stack to be reachable)."
+            )
         pytest.skip(f"Could not connect as {label}: {exc}")
 
 

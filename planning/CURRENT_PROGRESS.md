@@ -1,10 +1,10 @@
 # Current Progress
 
-Last committed checkpoint: `9fb94cdaf2224db6951cb58a409429781437234f`
-("feat: complete phase 1 paper execution gateway" - Step 9). Step 10
-(below) is implemented on top of this commit but is **not yet committed**
-- this document describes the current working tree, not a new checkpoint
-commit.
+Last committed checkpoint: `45d37a73db53997ae346dfc59bf2d8dce3a8a6f6`
+("feat: complete phase 1 step 10 paper proposal intake and ledger api" -
+Step 10), pushed to `origin/main`. Step 11 (below) is implemented on top of
+this commit but is **not yet committed** - this document describes the
+current working tree, not a new checkpoint commit.
 
 **Numbering note**: an older, external "approved Phase 1 plan" numbered
 steps differently (risk engine at its Step 11, intent minting at its Step
@@ -34,6 +34,7 @@ step," not a literal promise about which step number will do it.
 - Step 8 authentication, session management, RBAC, and CSRF
 - Step 9 PAPER execution gateway (ADR-011)
 - Step 10 PAPER trade-proposal intake and ledger API (ADR-012)
+- Step 11 verification harness integrity (no ADR - see below)
 
 ## Current repository state
 
@@ -353,16 +354,67 @@ step," not a literal promise about which step number will do it.
   `RateLimiter` implementation is deferred, per the Step 7 task's own
   scope note.
 
+## Step 11 - verification harness integrity
+
+A reconciliation pass ahead of scoping Step 11's original worker candidate
+found that the integration-test harness itself reported a false pass:
+`ops/scripts/run_integration_tests.sh` ran `pytest` on the **host**, but
+`docker-compose.test.yml`'s `atp_test_internal` network is `internal: true`
+with no published ports, so the host could never actually reach `postgres`/
+`redis`. `tests/integration/db/conftest.py` converted every resulting
+connection failure into `pytest.skip`, so `make test-integration` exited
+`0` with all 77 tests skipped - a green run proving nothing, which is
+exactly the failure mode this document's own "do not reinterpret skipped
+Docker tests as passing" instruction (below) exists to prevent.
+
+Step 11 fixed this without claiming to verify the data plane (Docker
+remains unavailable in this environment):
+
+- `ops/scripts/run_integration_tests.sh` now runs pytest **inside** the
+  compose network via the `test-runner` service (`docker compose ... run
+  --rm test-runner`), matching the invocation `docker-compose.test.yml`'s
+  own header already documented, instead of on the host.
+- `tests/integration/db/conftest.py` gained
+  `ATP_REQUIRE_INTEGRATION_STACK=1`: when set, a missing `TEST_*` DSN or an
+  unreachable instance calls `pytest.fail` instead of `pytest.skip`, so a
+  broken/unreachable stack is reported as a failure. The default
+  (unset/skip) behaviour for a plain local `pytest` run is unchanged.
+  `tests/unit/infra/test_integration_stack_gate.py` proves this switch
+  itself works, entirely without Docker.
+- `.github/workflows/ci.yml` gained an `integration` job running `make
+  test-integration` with `ATP_REQUIRE_INTEGRATION_STACK=1`, using
+  `continue-on-error: true` as a **temporary** bridge (it has never passed
+  in this environment) - removing that flag is Step 12's opening move.
+- Two previously-missing safety-ledger invariants were folded in, both
+  Docker-free: `test_no_cross_mode_foreign_keys.py` (#3, static
+  `Base.metadata` walk) and `test_secret_never_appears_in_logs.py` (#8,
+  proves redaction end-to-end through the real structlog pipeline,
+  including a rendered exception traceback). See `tests/safety/README.md`.
+
+**What remains true after Step 11, stated explicitly:** the 77
+Docker-gated integration tests have still never executed against a real
+PostgreSQL/Redis instance in this environment. Migrations, table grants,
+append-only triggers, and RBAC-at-DB-level remain unverified. Step 11 made
+the harness incapable of *lying* about that; it did not make the claim
+true.
+
 ## Next implementation step
 
-STEP 11 - not yet scoped in this document. Candidates surfaced during the
-Step 10 reconciliation but deliberately not started: `atp_worker` (session
-reap / audit integrity check / retention jobs - the strongest fully-
-unblocked runner-up; `atp_worker` retains real `UPDATE` privilege on
-`core.job_queue`, unlike ADR-011's situation, so a genuine
-`SELECT ... FOR UPDATE SKIP LOCKED` claim loop is possible there); a
-frontend scaffold (Node/npm not installed in this environment, and there
-is now a real API surface worth rendering); or a market-data/egress policy
+STEP 12 - not yet scoped in this document. Candidate (surfaced during the
+Step 10 reconciliation, still the strongest fully-unblocked runner-up):
+`atp_worker` (session reap / audit integrity check / retention jobs).
+Verified during Step 11's reconciliation that `atp_worker` genuinely holds
+`SELECT, INSERT, UPDATE, DELETE` on `core.job_queue`
+(`ops/sql/roles_and_schemas.sql.tmpl`, `0003_table_grants.py`) - unlike
+ADR-011's situation, a real `SELECT ... FOR UPDATE SKIP LOCKED` claim loop
+is possible there. Also verified: `SESSION_REAP` cannot reap as originally
+imagined - `0003_table_grants.py` revokes all writes on `core.sessions`
+from `atp_worker`, leaving only column-scoped `SELECT`; any session-reap
+job must be observe-only (count + audit event), with actual revocation
+happening lazily in `atp_api` at auth time, where the write grant already
+exists. Needs its own ADR (ADR-013, worker job execution model) before any
+code. Other candidates remain deliberately not started: a frontend scaffold
+(Node/npm not installed in this environment); a market-data/egress policy
 decision (blocked simultaneously by import-linter contract #4's no-egress
 rule, `Settings` refusing to start with any `KITE_*` var, and ADR-006's
 unreviewed-MCP gate - starting it is a phase boundary needing its own ADR
@@ -374,3 +426,5 @@ relevant ADRs/rules.
 
 Do not start live trading or broker integration.
 Do not reinterpret skipped Docker tests as passing.
+Do not reinterpret Step 11's harness fix as data-plane verification - the
+77 Docker-gated integration tests have still never executed here.

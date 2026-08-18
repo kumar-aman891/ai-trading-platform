@@ -47,7 +47,7 @@ access — verified by the `no HTTP client library` import-linter contract
 | Tampering | Attacker or bug mutates an audit row | Revoked grants + rejecting trigger (ADR-010) |
 | Tampering | Attacker submits raw order params to the executor | Executor accepts `{proposal_id}` only; `ApprovedOrderIntent` is the only thing a broker-facing method could ever accept (ADR-008) |
 | Repudiation | "The AI placed that order, not me" / order without a trail | Audit write shares a transaction with the state change (ADR-010); every AI action carries a decision ID (CLAUDE.md #9) |
-| Information disclosure | Secret leaks into logs/audit payload | Single redaction processor used by both logger and audit writer; dedicated test (`test_secret_never_appears_in_logs`) |
+| Information disclosure | Secret leaks into logs/audit payload | Single redaction processor used by both logger and audit writer; dedicated test (`tests/safety/test_secret_never_appears_in_logs.py`, Phase 1 Step 11 — proves this end to end through the real logging pipeline, not just the redaction function in isolation) |
 | Information disclosure | LIVE-scoped data reachable through the PAPER-scoped API role | Zero grants on `live` schema for `atp_api`/`atp_exec_paper` (ADR-005), mechanically tested |
 | Denial of service | Order-rate flooding | `API_EXECUTION` kill switch, order-rate limit (rule catalog; not the primary Phase 1 focus — no internet-facing order-heavy surface exists yet) |
 | Elevation of privilege | `paper_trader` reaching `administrator`-only actions (e.g. disengaging `GLOBAL_LIVE`) | Server-side RBAC on every route, tested by the full route×role matrix |

@@ -40,8 +40,12 @@ test:
 test-safety:
 	uv run pytest tests/safety -m safety --no-header
 
-# Requires Docker - brings up docker-compose.test.yml, runs tests/integration/db,
-# tears the stack down again. See tests/integration/README.md.
+# Requires Docker - brings up docker-compose.test.yml, runs tests/integration/db
+# *inside* the compose network via the test-runner service (a host-side
+# pytest process cannot reach either service - see the script), tears the
+# stack down again. Runs with ATP_REQUIRE_INTEGRATION_STACK=1, so a broken
+# or unreachable stack fails loudly instead of reporting 77 quiet skips.
+# See tests/integration/README.md.
 test-integration:
 	sh ops/scripts/run_integration_tests.sh
 

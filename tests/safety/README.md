@@ -15,12 +15,12 @@ external plan's numbering.
 |---|---|---|
 | 1 | `test_no_live_execution_module_exists` | ✅ implemented (`test_no_live_execution.py`) |
 | 2 | `test_api_db_role_has_zero_privileges_on_live_schema` | ✅ implemented, Docker-gated (`tests/integration/db/test_schema_isolation.py::test_api_role_has_zero_privileges_on_live_schema` + `test_paper_exec_role_has_zero_privileges_on_live_schema` + `test_worker_role_has_no_privileges_on_live_schema`) |
-| 3 | `test_no_foreign_key_crosses_mode_schemas` | still missing — no test exists yet. Structurally true today only because `live` holds zero tables (`persistence/src/atp_persistence/models/live.py`) for any FK to reference, not because anything asserts it; write a static (no-DB) test walking `Base.metadata` once `live.*` gains its first table |
+| 3 | `test_no_foreign_key_crosses_mode_schemas` | ✅ implemented, static/no-DB (`tests/safety/test_no_cross_mode_foreign_keys.py`, Phase 1 Step 11) — walks `Base.metadata` and asserts no FK crosses a `paper`/`live` schema boundary; currently vacuously true for `live` (zero tables), but now enforced mechanically before `live.*` ever gains its first table, not after |
 | 4 | `test_paper_table_rejects_live_mode_row` | ✅ implemented, Docker-gated (`tests/integration/db/test_table_constraints.py::test_trade_proposal_rejects_wrong_mode`) |
 | 5 | `test_live_proposal_rejects_on_every_rule` | ✅ implemented (`tests/unit/domain/test_risk_engine.py::test_live_proposal_can_never_be_approved`) |
 | 6 | `test_risk_engine_rejects_when_any_rule_indeterminate` | ✅ implemented (`tests/unit/domain/test_risk_engine.py::test_any_indeterminate_causes_overall_reject`) |
 | 7 | `test_kill_switch_fails_closed_on_{db,redis,missing_row,corrupt_value}` | ✅ implemented for db/missing_row/corrupt_value (`tests/unit/exec_paper/test_kill_switch_adapter.py::test_missing_switch_resolves_to_unavailable_via_domain_default`, `test_read_failure_yields_empty_mapping_failing_closed`, `test_unparseable_switch_id_is_skipped_not_raised`) — the "redis" case does not apply to this architecture: kill-switch state is PostgreSQL-backed only, never Redis-backed (ADR-002, `docs/TECH_STACK.md`) |
-| 8 | `test_secret_never_appears_in_logs` | still missing at the invariant's actual granularity — `tests/unit/test_redaction.py` proves the redaction *function* strips secrets from a mapping, but no test yet proves a secret never reaches the rendered log line through `atp_platform.logging`'s actual structlog pipeline end to end |
+| 8 | `test_secret_never_appears_in_logs` | ✅ implemented (`tests/safety/test_secret_never_appears_in_logs.py`, Phase 1 Step 11) — proves a secret never reaches the rendered log line through `atp_platform.logging`'s actual structlog pipeline end to end (bound kwarg, nested mapping, rendered exception traceback via `format_exc_info`, `SecretStr` repr); `tests/unit/test_redaction.py` still separately covers the redaction *function* in isolation |
 | 9 | `test_executor_rejects_payload_containing_order_parameters` | ✅ implemented (`test_no_execution_path_in_atp_exec_paper.py::test_gateway_public_functions_accept_no_raw_order_field`, Phase 1 Step 9) |
 | 10 | `test_intent_is_single_use_under_concurrency` | ✅ implemented, unit level (`tests/unit/exec_paper/test_gateway.py::test_concurrent_execution_of_the_same_proposal_produces_exactly_one_order`, Phase 1 Step 9); real-DB concurrency Docker-gated in `tests/integration/db/test_paper_execution_gateway.py` |
 | 11 | `test_duplicate_proposal_submission_creates_exactly_one_order` | ✅ implemented (same test as #10, Phase 1 Step 9) |
@@ -34,8 +34,6 @@ Two additional tests exist now as an early down payment on invariant #1:
 `test_no_live_execution_directory_exists` and
 `test_no_live_execution_module_is_importable`.
 
-**Genuinely still missing after this reconciliation:** #3 (no FK
-cross-schema test - low priority while `live` has zero tables) and #8 (no
-end-to-end log-line redaction proof, as opposed to the already-tested
-redaction function itself). Both are pre-existing gaps, not introduced by
-Phase 1 Step 10.
+**Update (Phase 1 Step 11):** #3 and #8, the two gaps identified during the
+Step 10 reconciliation, are now both implemented (see rows above). Every
+row in this table is now `✅ implemented`.

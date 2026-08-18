@@ -30,4 +30,16 @@ contract in the root `pyproject.toml` enforceable at all.
 ## Consequences
 Repository implementations in `atp_persistence.repositories` are
 responsible for mapping between ORM entities and domain objects at the
-boundary. This mapping code is Phase 1 Step 8 and does not exist yet.
+boundary. This mapping code is implemented in Phase 1 Step 6 -
+`atp_persistence.mappers` - covering every entity with a Step 4 domain
+dataclass equivalent (`TradeProposal`, `RiskDecision`, `Order`, `Fill`,
+`Position`, `RiskConfig`, `AuditEvent`). A handful of columns still have no
+domain field: `paper.trade_proposals.created_by`, `paper.fills.source`,
+and `core.risk_config.active`/`.created_by` are application/provenance
+metadata a Step 6 architecture reconciliation review confirmed belong
+outside the domain type, not a gap - documented in
+`atp_persistence.mappers`'s own module docstring. `paper.orders.intent_id`
+was different: it is the direct link in the TradeProposal -> RiskDecision
+-> ApprovedOrderIntent -> Order chain (ADR-008), so that same
+reconciliation widened `atp_domain.orders.Order` to carry it directly,
+rather than leaving it as a persistence-only parameter.

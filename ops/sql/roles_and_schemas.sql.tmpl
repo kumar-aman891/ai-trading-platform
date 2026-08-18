@@ -31,11 +31,12 @@
 -- concrete per-table security boundaries documented in docs/schemas/*.md
 -- (e.g. atp_api is INSERT-only on paper.trade_proposals but read-only on
 -- paper.risk_decisions; atp_paper_exec is the only writer of
--- paper.order_intents) are narrower than this file grants and are expected
--- to be applied as per-table REVOKE/GRANT statements in the Step 6+
--- migration, once those tables exist. That narrowing is deliberately NOT
--- implemented here - this file's job is schema-level isolation (above all,
--- that no application role reaches `live` at all), not final per-table ACLs.
+-- paper.order_intents) are narrower than this file grants. That narrowing
+-- is deliberately NOT implemented here - this file's job is schema-level
+-- isolation (above all, that no application role reaches `live` at all),
+-- not final per-table ACLs. It is applied by Phase 1 Step 6 migration
+-- 0003_table_grants (persistence/src/atp_persistence/migrations/versions/),
+-- once the tables this file's defaults reference actually exist.
 
 -- ---------------------------------------------------------------------------
 -- 1. Roles - LOGIN, never SUPERUSER, never CREATEDB/CREATEROLE.

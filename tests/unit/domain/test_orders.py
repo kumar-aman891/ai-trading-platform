@@ -14,6 +14,7 @@ from atp_domain.orders import Fill, Order, Position, validate_transition
 from atp_domain.types import (
     FillId,
     InstrumentId,
+    IntentId,
     Mode,
     OrderId,
     OrderStatus,
@@ -31,6 +32,7 @@ def _order(status: OrderStatus = OrderStatus.SUBMITTED) -> Order:
         internal_order_id=OrderId("aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa"),
         mode=Mode.PAPER,
         proposal_id=ProposalId("bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb"),
+        intent_id=IntentId("ffffffff-ffff-7fff-8fff-ffffffffffff"),
         idempotency_key="idem-1",
         status=status,
         submitted_at=NOW,

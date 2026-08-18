@@ -1,7 +1,8 @@
-"""SQLAlchemy models, Alembic migrations, repository implementations.
-
-Empty in Phase 1 Step 2. Engine/session setup, ORM models, and repositories
-land in Phase 1 Step 8, after migrations 0001 (core+audit+paper) and 0002
-(live — empty, ungranted) in Steps 6-7. See docs/schemas/ for the concrete
-entity specifications those migrations will implement.
+"""SQLAlchemy models, Alembic migrations, and repository implementations
+(Phase 1 Step 6). See `docs/schemas/` for the entity specifications these
+migrations implement, `atp_persistence.db` for engine/session/Unit-of-Work
+construction, and `atp_persistence.mappers` for the explicit domain <-> ORM
+boundary (ADR-009).
 """
+
+from __future__ import annotations

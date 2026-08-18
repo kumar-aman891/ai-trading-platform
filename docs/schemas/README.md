@@ -3,8 +3,11 @@
 Concrete types, keys, indexes, nullability, and enum vocabularies for every
 Phase 1 entity, organized by PostgreSQL schema per
 [ADR-005](../adr/ADR-005-paper-live-isolation.md). This is the input to
-migrations 0001 (`core` + `audit` + `paper`) and 0002 (`live`, empty), which
-are Phase 1 Steps 6–7 and not part of this document set.
+Phase 1 Step 6's Alembic migrations
+(`persistence/src/atp_persistence/migrations/versions/`) - `0001` (`core` +
+`audit` + `paper` tables, triggers, and seeded kill-switch rows), `0002`
+(seeded `FIXTURE` instruments), and `0003` (table-level grants); `live` is
+asserted idempotently by `0001` but gains no table, per ADR-005 §5.4.
 
 [docs/SCHEMAS.md](../SCHEMAS.md) remains the conceptual sketch; these files
 are its concrete counterpart.

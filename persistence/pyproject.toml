@@ -6,6 +6,9 @@ requires-python = ">=3.12"
 dependencies = [
     "atp-domain",
     "atp-platform",
+    "sqlalchemy>=2.0.35,<3",
+    "alembic>=1.13.3",
+    "psycopg[binary]>=3.2",
 ]
 
 [tool.uv.sources]

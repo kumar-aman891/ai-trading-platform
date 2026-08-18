@@ -20,6 +20,7 @@ from atp_domain.money import Money, Price, Quantity, normalize_decimal
 from atp_domain.types import (
     FillId,
     InstrumentId,
+    IntentId,
     Mode,
     OrderId,
     OrderStatus,
@@ -47,9 +48,18 @@ def validate_transition(current: OrderStatus, new: OrderStatus) -> None:
 
 @dataclass(frozen=True, slots=True)
 class Order:
+    """`intent_id` is the `ApprovedOrderIntent` that authorized this order
+    (ADR-008) - the direct link in the TradeProposal -> RiskDecision ->
+    ApprovedOrderIntent -> Order chain, not merely a persistence detail.
+    Required, like `proposal_id`, rather than derived by joining through
+    the proposal (that join happens to be 1:1 in Phase 1's schema, but
+    that is a database constraint, not a domain invariant this type should
+    depend on)."""
+
     internal_order_id: OrderId
     mode: Mode
     proposal_id: ProposalId
+    intent_id: IntentId
     idempotency_key: str
     status: OrderStatus
     submitted_at: datetime

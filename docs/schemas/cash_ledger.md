@@ -24,7 +24,25 @@ implemented capital check in Phase 1, per the plan's §11.3).
 ## Security boundary
 Written only by `atp_exec_paper`. The starting `DEPOSIT` is
 migration-seeded per paper account, not user-configurable via any Phase 1
-API route.
+API route - migration `0004_paper_cash_ledger_seed` inserts one
+`PAPER_INITIAL_CAPITAL = 10,000,000` (`Decimal("10000000.000000")`)
+`DEPOSIT` row, a deliberately conservative fixture value (ten times
+migration 0001's `_BOOTSTRAP_MAX_ORDER_NOTIONAL`), not derived from any
+spec. Not configurable by design - there is no environment variable for it
+and none is planned; changing it means changing the migration.
+
+`PAPER_INITIAL_CAPITAL` is:
+- a Phase-1 deterministic paper-trading fixture, chosen only to make paper
+  execution reproducible (`RISK.CAPITAL.001`/`SimulatedCashSufficiencyRule`
+  needs a real, non-`None` balance to evaluate a proposal against at all);
+- **not** a real brokerage/account balance - no broker connection exists
+  in Phase 1 for one to reflect (ADR-006, ADR-008);
+- **not** a production risk limit - `core.risk_config.max_order_notional`
+  is the risk limit; this is only the simulated cash the one fixture
+  account starts with;
+- **not** an assumption about any real user's capital - see the "Note"
+  section below (one simulated account, shared by every `paper_trader`+
+  user).
 
 ## Note
 This ledger is intentionally simple — a running balance, not a

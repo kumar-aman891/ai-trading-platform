@@ -28,13 +28,17 @@ API caller" true at the type level, not by convention.
 
 ## Security boundary
 This table's write path is the narrowest in the schema. `atp_api` has no
-`INSERT` grant on it at all — only `atp_exec_paper` does, and even there,
-only through the single minting call site (enforced by the import-linter
-contract restricting who may import `atp_domain.intents._mint`, and by
-`test_approved_intent_minted_only_by_risk_engine`, Phase 1 Step 12).
+`INSERT` grant on it at all — only `atp_exec_paper` does (Phase 1 Step 9,
+ADR-011), and even there, only through
+`atp_domain.risk.engine.mint_intent_for_decision` - the single capability-
+gated minting call site (`atp_domain.intents`'s module docstring), enforced
+by `test_approved_intent_minted_only_by_risk_engine` and
+`test_atp_exec_paper_never_imports_the_low_level_minting_primitives`
+(`tests/safety/test_no_execution_path_in_atp_exec_paper.py`).
 
 ## Testing
-`test_intent_is_single_use_under_concurrency` (Phase 1 Step 12) submits the
-same `decision_id` concurrently and asserts exactly one `order_intents` row
-and exactly one downstream `paper.orders` row result — the `UNIQUE
+`test_intent_is_single_use_under_concurrency` (Phase 1 Step 9, ADR-011)
+submits the same `decision_id` concurrently and asserts exactly one
+`order_intents` row and exactly one downstream `paper.orders` row result —
+the `UNIQUE
 (decision_id)` constraint is the mechanism, the test is the proof.

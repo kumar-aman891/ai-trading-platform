@@ -1,10 +1,21 @@
 # Current Progress
 
-Last committed checkpoint: `e8910c886e395a5b3df34ecd13a55d5f22fe4818`
-("feat: complete phase 1 persistence and database layer" - Step 6 +
-architecture reconciliation). Steps 7 and 8 (below) are implemented on top
-of this commit but are **not yet committed** - this document describes the
-current working tree, not a new checkpoint commit.
+Last committed checkpoint: `72b5a9324a64dc88cafd8a1063c7a2775577e945`
+("feat: complete phase 1 application foundation and authentication" - Steps
+7+8 combined). Step 9 (below) is implemented on top of this commit but is
+**not yet committed** - this document describes the current working tree,
+not a new checkpoint commit.
+
+**Numbering note**: an older, external "approved Phase 1 plan" numbered
+steps differently (risk engine at its Step 11, intent minting at its Step
+12, auth at its Step 13, the paper gateway at its Step 14). Actual execution
+compressed this - the risk engine and `ApprovedOrderIntent` landed in Step 4,
+auth in Step 8. From Step 9 onward, "Step N" refers to the sequence actually
+committed in this repository, not the old external plan's numbering. Several
+`docs/schemas/*.md`/ADR citations of the old numbering were reconciled to
+the real step during Step 9; any remaining `docs/`-level citation of a
+double-digit "Step N" for work not yet built should be read as "a future
+step," not a literal promise about which step number will do it.
 
 ## Completed
 
@@ -21,6 +32,7 @@ current working tree, not a new checkpoint commit.
   `atp_domain.orders.Order.intent_id` added to the domain contract)
 - Step 7 application/FastAPI foundation (read-only)
 - Step 8 authentication, session management, RBAC, and CSRF
+- Step 9 PAPER execution gateway (ADR-011)
 
 ## Current repository state
 
@@ -31,7 +43,35 @@ current working tree, not a new checkpoint commit.
 - No LLM
 - No market-data implementation
 - No backtesting
-- No automated strategies
+- No automated strategies (proposals are still human-created; no strategy
+  registry/signal engine exists to generate one)
+- No new API route (Step 9's `atp_api` diff is zero, per ADR-011 §2 D2)
+- PAPER execution gateway implemented (Step 9, ADR-011):
+  `execution/paper/src/atp_exec_paper/` is no longer an empty stub -
+  `simulator.py` (deliberately fake fill simulator), `risk_runner.py`
+  (authoritative `RuleContext` assembly), `gateway.py` (the
+  `TradeProposal -> RiskDecision -> ApprovedOrderIntent -> Order -> Fill ->
+  Position -> Cash ledger -> Audit` pipeline, one `PaperExecutionUnitOfWork`
+  transaction per proposal), `kill_switch_adapter.py` (DB -> domain
+  fail-closed `SwitchState` mapping), `uow.py` (a dedicated Unit of Work
+  exposing only the repositories `atp_paper_exec` is actually granted), and
+  `__main__.py` (`python -m atp_exec_paper` - poll loop or one-shot). The
+  gateway's only external input is a bare `proposal_id`; every other order
+  field is reloaded from the database itself
+  (`tests/safety/test_no_execution_path_in_atp_exec_paper.py`). Invoked only
+  by a DB-polled claim loop (ADR-011) - never imported by `atp_api`, never
+  reachable over HTTP, never routed through the worker. A PAPER MARKET
+  proposal is rejected deterministically by a new seventh real PAPER rule
+  (`RISK.DATA.001`/`PricedReferenceRule`,
+  `atp_domain.risk.catalog.data_rules`) - no reference price is ever
+  invented. Six new repositories
+  (`order_intents`/`fills`/`positions`/`cash_ledger`/`instruments`/`risk_config`)
+  back it; migration `0004_paper_cash_ledger_seed` seeds the opening PAPER
+  cash `DEPOSIT` (`PAPER_INITIAL_CAPITAL = 10,000,000` -
+  `docs/schemas/cash_ledger.md`'s explicit classification: a Phase-1
+  deterministic paper-trading fixture only, not a real brokerage balance,
+  not a production risk limit, not an assumption about any user's actual
+  capital; not configurable, no environment variable).
 - Authentication/authorization/session/CSRF/RBAC implemented (Step 8):
   Argon2id password hashing, opaque hashed-token server-side sessions
   (8h sliding TTL), double-submit CSRF, five-role RBAC with a central
@@ -114,30 +154,27 @@ current working tree, not a new checkpoint commit.
 
 ## Completed verification
 
-- Current test count: 366 passed, 71 skipped (Docker-dependent only) - up
-  from 274/66 at the Step 7 checkpoint: +92 no-DB tests under
-  `tests/unit/security/`, `tests/unit/api/` (new `fakes.py` in-memory
-  `UnitOfWork` double + `test_auth_flows.py`/`test_bootstrap.py`/
-  `test_auth_no_db.py`), and `tests/safety/`; +5 Docker-gated integration
-  tests in `tests/integration/db/test_auth_flows.py`
-- ruff format / ruff check: clean
-- mypy --strict: clean (106 source files)
-- import-linter: 4/4 contracts kept
-- pre-commit (14 hooks, incl. gitleaks): all passed (requires `uv` on
-  PATH - the `mypy`/`import-linter` hooks shell out to it; this session's
-  environment only has `uv` inside `.venv/Scripts`, not the system PATH)
-- Docker-dependent tests skipped because Docker is unavailable in this
-  environment - not run, not faked as passing. Step 8's login/session/RBAC
-  logic is instead exercised through real HTTP requests against the fully
-  wired app with only the database dependency
-  (`atp_api.deps.get_unit_of_work`) swapped for an in-memory fake
-  (`tests/unit/api/fakes.py`) - genuine login/logout/session-expiry/
-  sliding-renewal/CSRF/RBAC-matrix flows all run without Docker this way.
-  A real-database round trip (real `SqlAlchemyUserRepository`/
-  `SqlAlchemySessionRepository`, a genuinely-already-expired row, real
-  table grants) still needs `tests/integration/db/test_auth_flows.py`,
-  which remains skip-gated exactly like every other Step 5+ Docker-
-  dependent test.
+- Test count grew again at the Step 9 checkpoint: new no-DB tests under
+  `tests/unit/exec_paper/` (`fakes.py` in-memory `PaperExecutionUnitOfWork`
+  double + `test_gateway.py`/`test_risk_runner.py`/`test_simulator.py`/
+  `test_kill_switch_adapter.py`), `tests/unit/domain/` (the new
+  `RISK.DATA.001`/MARKET-rejection test, registry/engine count updates),
+  `tests/unit/persistence/` (mapper + migration-chain updates), and
+  `tests/safety/test_no_execution_path_in_atp_exec_paper.py`; +3 Docker-gated
+  integration tests in `tests/integration/db/test_paper_execution_gateway.py`
+- ruff format / ruff check / mypy --strict / import-linter / pytest /
+  pre-commit / gitleaks: see the Step 9 implementation report for this
+  session's actual run results
+- Docker-dependent tests skipped when Docker is unavailable - not run, not
+  faked as passing. The gateway's full logic (approval, MARKET rejection,
+  kill-switch fail-closed behavior, insufficient-cash rejection, and a
+  simulated claim race via a fake that raises a real
+  `sqlalchemy.exc.IntegrityError` on a duplicate `risk_decisions` save) is
+  exercised without Docker through `tests/unit/exec_paper/fakes.py`. The
+  genuine real-PostgreSQL concurrency proof (two actually-concurrent
+  `run_once` calls over two separate connections, real `atp_paper_exec`
+  grants) still needs `tests/integration/db/test_paper_execution_gateway.py`,
+  skip-gated exactly like every other Step 5+ Docker-dependent test.
 
 ## Known follow-ups
 
@@ -145,7 +182,8 @@ current working tree, not a new checkpoint commit.
   `must_change_password=True` is surfaced in `GET /api/v1/auth/me` but
   nothing yet lets them act on it. Deferred rather than blocking login
   entirely (which would be a lockout, not a safety improvement) until a
-  Step 9+ mutation route exists.
+  future `atp_api` mutation route exists (Step 9 added no new `atp_api`
+  route - ADR-011 §2 D2).
 - Rate limiting for login remains in-process/in-memory
   (`ApiSettings.login_rate_limit_*`), same single-process caveat as the
   Step 7 general limiter.
@@ -173,13 +211,32 @@ current working tree, not a new checkpoint commit.
   but `atp_domain.risk.config.RiskConfig` only models `max_order_notional`
   - an acknowledged Step 4 completeness gap (Phase 1 only implements two
     capital/notional rules), not a placement error.
-- `atp_domain.ports.storage` still declares only four repository
-  protocols (unchanged by Step 8 - see "Important architectural
-  decisions" above for why `users`/`sessions` got persistence-layer
-  classes instead). `paper.fills`/`positions`/`cash_ledger`,
-  `core.instruments`/`risk_config`/`kill_switch_*`/`job_queue` have ORM
-  models and migration DDL but no repository class or Protocol at all -
-  none was fabricated beyond what a real caller (Step 6/7/8) needed.
+- `atp_domain.ports.storage` now declares seven repository protocols:
+  the original four, plus `OrderIntentRepository`/`FillRepository`/
+  `PositionRepository` (Step 9) - `Fill`/`Position`/`ApprovedOrderIntent`
+  are genuine domain types their repository is the unit of work for, so
+  they got Protocols; `cash_ledger`/`instruments`/`risk_config` got
+  persistence-layer-only classes instead (no domain type exists for a cash
+  ledger entry, and reading `RiskConfig`/instrument lot-tick data is a
+  lookup, not a domain operation), mirroring the
+  `SqlAlchemyKillSwitchStateRepository` precedent. `core.job_queue` still
+  has ORM models and migration DDL but no repository at all - `atp_worker`
+  remains unbuilt.
+- `atp_exec_paper` does not reuse `atp_persistence.db.UnitOfWork` - a
+  dedicated `PaperExecutionUnitOfWork` (`atp_exec_paper.uow`) exposes only
+  the repositories `atp_paper_exec`'s DB role actually holds grants for,
+  deliberately excluding `users`/`sessions` (ADR-011, migration 0003).
+- ADR-011: the paper execution gateway is invoked by a DB-polled claim
+  loop, not an in-process call, HTTP request, or worker job (no invocation
+  mechanism existed for any of those without violating an existing
+  contract or grant boundary). Exclusivity between concurrent claimants is
+  the `UNIQUE (proposal_id)` constraint on `paper.risk_decisions`, not a
+  row lock - `atp_paper_exec` holds only `SELECT` on
+  `paper.trade_proposals` (migration 0003), and PostgreSQL requires
+  `UPDATE`/`DELETE` privilege for `SELECT ... FOR UPDATE`, so a literal
+  row-locking claim was not implementable without widening a grant
+  deliberately narrowed in Step 6/7 - see ADR-011 for the full reasoning
+  and the explicit user decision behind it.
 - `backend/src/atp_api/main.py`'s `uvicorn.run` entrypoint has not been
   exercised end-to-end (no port actually bound/served in this
   environment) - only `create_app()` + `TestClient` were exercised.
@@ -190,8 +247,14 @@ current working tree, not a new checkpoint commit.
 
 ## Next implementation step
 
-STEP 9 - not yet scoped in this document. Do not begin without an explicit
-instruction and a fresh read of CLAUDE.md and the relevant ADRs/rules.
+STEP 10 - not yet scoped in this document. Candidates surfaced during the
+Step 9 reconciliation but deliberately not started: an API route to submit
+a `TradeProposal` (`POST /api/v1/paper/proposals` - note this would need a
+route name that avoids the substring "order",
+`tests/safety/test_no_execution_path_in_api.py` forbids it in any path);
+`atp_worker` (session reap / audit integrity check / retention jobs); or an
+instrument-master loader. Do not begin without an explicit instruction and
+a fresh read of CLAUDE.md and the relevant ADRs/rules.
 
 ## Critical instruction
 

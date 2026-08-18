@@ -267,7 +267,7 @@ def test_paper_proposal_is_approved_with_a_well_formed_context() -> None:
         clock=FrozenClock(NOW),
     )
     assert decision.outcome is DecisionOutcome.APPROVED
-    assert len(decision.rule_results) == 6
+    assert len(decision.rule_results) == 7
 
 
 def test_paper_proposal_rejected_when_kill_switch_engaged() -> None:
@@ -306,6 +306,32 @@ def test_paper_proposal_rejected_when_context_data_missing_fails_closed() -> Non
         r.rule_id for r in decision.rule_results if r.outcome is RuleOutcome.INDETERMINATE
     }
     assert indeterminate_ids  # at least lot-size and cash rules are indeterminate
+
+
+def test_paper_market_proposal_is_rejected_deterministically() -> None:
+    """Step 9 D3: a PAPER MARKET proposal must never be approved, and no
+    price is ever invented for it - RISK.DATA.001 (the real Phase 1
+    implementation of the "priced reference" check) returns INDETERMINATE
+    for MARKET, which the aggregator collapses to REJECTED, the same as
+    RISK.CAPITAL.001 and RISK.LIMIT.001 independently do for the same
+    reason."""
+    context = RuleContext(
+        config=_config(Mode.PAPER),
+        kill_switch_states={SwitchId(SwitchScope.PAPER): SwitchState.DISENGAGED},
+        available_cash=Money(Decimal("100000")),
+        instrument_lot_size=1,
+        instrument_tick_size=Price(Decimal("0.05")),
+    )
+    decision = evaluate(
+        _proposal(order_type=OrderType.MARKET, limit_price=None),
+        context,
+        DEFAULT_REGISTRY,
+        id_generator=SequentialIdGenerator(),
+        clock=FrozenClock(NOW),
+    )
+    assert decision.outcome is DecisionOutcome.REJECTED
+    data_result = next(r for r in decision.rule_results if r.rule_id == "RISK.DATA.001")
+    assert data_result.outcome is RuleOutcome.INDETERMINATE
 
 
 def test_live_proposal_can_never_be_approved() -> None:

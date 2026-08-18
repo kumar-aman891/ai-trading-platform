@@ -65,8 +65,8 @@ def test_default_registry_contains_every_canonical_id_under_live() -> None:
     assert DEFAULT_REGISTRY.rule_ids_for_mode(Mode.LIVE) == CANONICAL_RULE_IDS
 
 
-def test_default_registry_paper_set_is_exactly_the_six_approved_rules() -> None:
-    assert len(PAPER_APPROVED_RULE_IDS) == 6
+def test_default_registry_paper_set_is_exactly_the_seven_approved_rules() -> None:
+    assert len(PAPER_APPROVED_RULE_IDS) == 7
     assert DEFAULT_REGISTRY.rule_ids_for_mode(Mode.PAPER) == PAPER_APPROVED_RULE_IDS
     assert PAPER_APPROVED_RULE_IDS.issubset(CANONICAL_RULE_IDS)
 

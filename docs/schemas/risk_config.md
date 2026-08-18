@@ -53,8 +53,10 @@ this change.
 
 ## Phase 1 rule set
 See [docs/adr/ADR-005](../adr/ADR-005-paper-live-isolation.md) and the risk
-engine skeleton (Phase 1 Step 11): six PAPER rules are genuinely
-implemented (mode match, kill-switch state, order quantity/lot/tick,
-order-type/price coherence, max notional, simulated cash sufficiency); all
-LIVE rules are `INDETERMINATE` stubs, which the aggregator collapses to
+engine (`atp_domain.risk.catalog`/`atp_domain.risk.engine`, Phase 1 Step 4;
+its seventh real PAPER rule, `RISK.DATA.001`, was added in Phase 1 Step 9):
+seven PAPER rules are genuinely implemented (mode match, kill-switch state,
+order quantity/lot/tick, order-type/price coherence, max notional,
+simulated cash sufficiency, priced-reference/MARKET-rejection); all LIVE
+rules are `INDETERMINATE` stubs, which the aggregator collapses to
 `REJECT`.

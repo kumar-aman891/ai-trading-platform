@@ -30,8 +30,11 @@ broker in Phase 1.
 Workers claim rows via
 `SELECT ... FOR UPDATE SKIP LOCKED WHERE status = 'PENDING' AND scheduled_for <= now() ORDER BY scheduled_for LIMIT 1`,
 per the plan's §6 module design for `atp_worker`. Idempotent re-execution is
-required: a crash mid-job must leave no partial state (tested in Phase 1
-Step 16).
+required: a crash mid-job must leave no partial state (tested once
+`atp_worker` is implemented, in a future step - unlike `atp_exec_paper`
+(Phase 1 Step 9, ADR-011), `atp_worker` holds full `SELECT`/`INSERT`/`UPDATE`
+on `core.job_queue`, so `SELECT ... FOR UPDATE SKIP LOCKED` is a legitimate
+claim mechanism for it, unlike for `atp_paper_exec` on `paper.trade_proposals`).
 
 ## Security boundary
 Read/write: `atp_worker` only. `atp_worker` holds **no** privileges on

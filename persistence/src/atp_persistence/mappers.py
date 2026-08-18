@@ -43,6 +43,7 @@ from types import MappingProxyType
 from typing import cast
 
 from atp_domain.audit import AuditEvent
+from atp_domain.intents import ApprovedOrderIntent, CanonicalOrderPayload
 from atp_domain.money import Money, Price, Quantity
 from atp_domain.orders import Fill, Order, Position
 from atp_domain.proposals import TradeProposal
@@ -73,6 +74,7 @@ from atp_persistence.models.audit import AuditEventRow
 from atp_persistence.models.core import RiskConfigRow
 from atp_persistence.models.paper import (
     FillRow,
+    OrderIntentRow,
     OrderRow,
     PositionRow,
     RiskDecisionRow,
@@ -179,6 +181,39 @@ def row_to_risk_decision(row: RiskDecisionRow) -> RiskDecision:
         risk_config_id=RiskConfigId(row.risk_config_id),
         limit_snapshot_hash=row.limit_snapshot_hash,
         decided_at=row.decided_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# ApprovedOrderIntent (write-only - see OrderIntentRepository's docstring
+# for why no row_to_order_intent function exists)
+# ---------------------------------------------------------------------------
+
+
+def _canonical_payload_to_dict(payload: CanonicalOrderPayload) -> dict[str, object]:
+    return {
+        "instrument_id": payload.instrument_id,
+        "side": payload.side.value,
+        "quantity": str(payload.quantity.value),
+        "order_type": payload.order_type.value,
+        "limit_price": str(payload.limit_price.value) if payload.limit_price is not None else None,
+        "trigger_price": str(payload.trigger_price.value)
+        if payload.trigger_price is not None
+        else None,
+        "product": payload.product.value,
+    }
+
+
+def order_intent_to_row(intent: ApprovedOrderIntent) -> OrderIntentRow:
+    return OrderIntentRow(
+        intent_id=intent.intent_id,
+        mode=intent.mode.value,
+        decision_id=intent.decision_id,
+        proposal_id=intent.proposal_id,
+        canonical_payload=_canonical_payload_to_dict(intent.canonical_payload),
+        payload_hash=intent.payload_hash,
+        minted_at=intent.minted_at,
+        expires_at=intent.expires_at,
     )
 
 

@@ -34,10 +34,13 @@ TradeProposal -> RiskDecision -> ApprovedOrderIntent -> BrokerExecutionPort.subm
   `atp_domain.risk.engine` from importing it, and a dedicated test
   (`test_approved_intent_minted_only_by_risk_engine`).
 - **No implementation of `BrokerExecutionPort` exists in Phase 1.** No
-  `execution/live/` package is created. `atp_exec_paper` exists and
-  exercises the identical `TradeProposal -> RiskDecision -> intent` pipeline
-  against a fake fill simulator, so the pipeline is genuinely exercised, but
-  it does not implement `BrokerExecutionPort` against a real broker.
+  `execution/live/` package is created. `atp_exec_paper` (Phase 1 Step 9,
+  ADR-011) exercises the identical `TradeProposal -> RiskDecision -> intent`
+  pipeline against a fake fill simulator - `atp_exec_paper.gateway`'s
+  `mint_intent_for_decision` call, inside `_execute_approved`, is the one
+  and only call site outside `atp_domain.risk.engine` itself and the test
+  suite - so the pipeline is genuinely exercised, but it does not implement
+  `BrokerExecutionPort` against a real broker.
 
 ## Consequences
 Every future broker integration — Kite direct, or any other broker adopted

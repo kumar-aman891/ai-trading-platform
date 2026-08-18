@@ -12,13 +12,15 @@ fabricated default value.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atp_domain.proposals import TradeProposal
-from atp_domain.types import ProposalId
+from atp_domain.types import Mode, ProposalId
 from atp_persistence.mappers import row_to_trade_proposal, trade_proposal_to_row
-from atp_persistence.models.paper import TradeProposalRow
+from atp_persistence.models.paper import RiskDecisionRow, TradeProposalRow
 
 
 class SqlAlchemyTradeProposalRepository:
@@ -43,3 +45,24 @@ class SqlAlchemyTradeProposalRepository:
         )
         row = result.scalar_one_or_none()
         return row_to_trade_proposal(row) if row is not None else None
+
+    async def list_unevaluated_paper_proposal_ids(self, *, limit: int) -> Sequence[str]:
+        """Not part of the Protocol; exposed for `atp_exec_paper`'s claim
+        loop (ADR-011) - PAPER proposals with no matching
+        `paper.risk_decisions` row, oldest first. A plain, unlocked SELECT:
+        exclusivity for concurrent claimants is enforced by the
+        `UNIQUE (proposal_id)` constraint on `paper.risk_decisions` at
+        write time (ADR-011), not by a row lock here - `atp_paper_exec`
+        holds only `SELECT` on `paper.trade_proposals` (migration 0003),
+        which `SELECT ... FOR UPDATE` cannot run under in PostgreSQL."""
+        result = await self._session.execute(
+            select(TradeProposalRow.proposal_id)
+            .outerjoin(RiskDecisionRow, RiskDecisionRow.proposal_id == TradeProposalRow.proposal_id)
+            .where(
+                TradeProposalRow.mode == Mode.PAPER.value,
+                RiskDecisionRow.decision_id.is_(None),
+            )
+            .order_by(TradeProposalRow.created_at)
+            .limit(limit)
+        )
+        return [row[0] for row in result.all()]

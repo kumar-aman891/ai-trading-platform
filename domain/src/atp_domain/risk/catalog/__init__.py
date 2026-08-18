@@ -1,9 +1,10 @@
 """Builds DEFAULT_REGISTRY: the complete canonical ~28 rule IDs, each
-registered under LIVE as an always-INDETERMINATE stub, plus the six IDs
+registered under LIVE as an always-INDETERMINATE stub, plus the seven IDs
 that additionally have a real PAPER implementation
-(docs - approved Phase 1 plan §11.2-11.3).
+(docs - approved Phase 1 plan §11.2-11.3; RISK.DATA.001 added in Phase 1
+Step 9 - see atp_domain.risk.catalog.data_rules's module docstring).
 
-PAPER's rule set is *exactly* the six real rules - the other 22 canonical
+PAPER's rule set is *exactly* the seven real rules - the other 21 canonical
 IDs are never registered under PAPER at all, so "any INDETERMINATE causes
 REJECT" applies with no carve-out: PAPER can reach APPROVED because its
 rule set contains nothing that returns a hardcoded INDETERMINATE, while
@@ -87,6 +88,7 @@ PAPER_APPROVED_RULE_IDS: frozenset[str] = frozenset(
         order_rules.RULE_ID_TYPE_PRICE_COHERENCE,
         limit_rules.RULE_ID_MAX_ORDER_NOTIONAL,
         capital_rules.RULE_ID_SIMULATED_CASH,
+        data_rules.RULE_ID_PRICED_REFERENCE,
     }
 )
 
@@ -97,6 +99,7 @@ _PAPER_REAL_RULES: dict[str, Rule] = {
     order_rules.RULE_ID_TYPE_PRICE_COHERENCE: order_rules.OrderTypePriceCoherenceRule(),
     limit_rules.RULE_ID_MAX_ORDER_NOTIONAL: limit_rules.MaxOrderNotionalRule(),
     capital_rules.RULE_ID_SIMULATED_CASH: capital_rules.SimulatedCashSufficiencyRule(),
+    data_rules.RULE_ID_PRICED_REFERENCE: data_rules.PricedReferenceRule(),
 }
 
 

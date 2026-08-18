@@ -3,9 +3,16 @@
 ## Purpose
 Simulated fill records. **Deliberately fake in Phase 1** — see
 `atp_exec_paper.simulator`: immediate full fill at the proposal's limit
-price (or a caller-supplied reference price for market orders), no
-slippage, no partial fills, no latency. Every row and every API response
-built from it carries `simulated = true`.
+price, no slippage, no partial fills, no latency. A MARKET proposal never
+reaches the simulator at all — Phase 1 has no market-data adapter, so no
+canonical reference price exists for one to be filled at
+(`RISK.DATA.001`/`atp_domain.risk.catalog.data_rules.PricedReferenceRule`,
+Phase 1 Step 9 / ADR-011: MARKET is deterministically `INDETERMINATE`,
+which the risk engine's reject-by-default aggregation turns into
+`REJECTED`, before any fill could be written). No row in this table is ever
+produced for a MARKET proposal, and no caller-supplied reference price is
+ever accepted or invented. Every row and every API response built from it
+carries `simulated = true`.
 
 ## Columns
 

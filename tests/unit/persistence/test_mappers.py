@@ -16,6 +16,9 @@ from decimal import Decimal
 from types import MappingProxyType
 
 from atp_domain.audit import AuditEvent
+from atp_domain.clock import FrozenClock
+from atp_domain.ids import SequentialIdGenerator
+from atp_domain.intents import CanonicalOrderPayload
 from atp_domain.money import Money, Price, Quantity
 from atp_domain.orders import Fill, Order, Position
 from atp_domain.proposals import TradeProposal
@@ -25,7 +28,7 @@ from atp_domain.risk.config import RiskConfig
 # (it validates outcome against rule_results in __post_init__), so these
 # tests build one through the real module rather than hand-rolling a
 # dataclass that could drift from the invariant it enforces.
-from atp_domain.risk.engine import RiskDecision
+from atp_domain.risk.engine import RiskDecision, mint_intent_for_decision
 from atp_domain.risk.outcomes import RuleOutcome, RuleResult
 from atp_domain.types import (
     ActorType,
@@ -128,6 +131,55 @@ def test_order_round_trip_preserves_intent_id() -> None:
     assert round_tripped.status is OrderStatus.SUBMITTED
     assert round_tripped.intent_id == "77777777-7777-7777-8777-777777777777"
     assert row.intent_id == "77777777-7777-7777-8777-777777777777"
+
+
+def test_order_intent_to_row_preserves_canonical_payload_and_hash() -> None:
+    """`order_intent_to_row` is write-only (no `row_to_order_intent` -
+    `ApprovedOrderIntent` requires a genuine `MintingCapability` to
+    construct, which a row can never supply - see
+    `atp_domain.ports.storage.OrderIntentRepository`'s docstring). This
+    test proves the row captures the minted intent's fields losslessly by
+    inspecting the row directly, not by round-tripping."""
+    decision = RiskDecision(
+        decision_id=DecisionId("44444444-4444-7444-8444-444444444444"),
+        mode=Mode.PAPER,
+        proposal_id=ProposalId("11111111-1111-7111-8111-111111111111"),
+        outcome=DecisionOutcome.APPROVED,
+        rule_results=(RuleResult(rule_id="MODE.001", outcome=RuleOutcome.PASS, message="ok"),),
+        risk_config_id=RiskConfigId("55555555-5555-7555-8555-555555555555"),
+        limit_snapshot_hash="deadbeef",
+        decided_at=_AWARE_TS,
+    )
+    payload = CanonicalOrderPayload(
+        instrument_id=InstrumentId("22222222-2222-7222-8222-222222222222"),
+        side=Side.BUY,
+        quantity=Quantity(Decimal("10.500000")),
+        order_type=OrderType.LIMIT,
+        limit_price=Price(Decimal("1234.567890")),
+        trigger_price=None,
+        product=Product.CNC,
+    )
+    intent = mint_intent_for_decision(
+        decision,
+        payload,
+        id_generator=SequentialIdGenerator(),
+        clock=FrozenClock(_AWARE_TS),
+    )
+
+    row = mappers.order_intent_to_row(intent)
+
+    assert row.intent_id == intent.intent_id
+    assert row.mode == "PAPER"
+    assert row.decision_id == decision.decision_id
+    assert row.proposal_id == decision.proposal_id
+    assert row.payload_hash == intent.payload_hash
+    assert row.canonical_payload["instrument_id"] == "22222222-2222-7222-8222-222222222222"
+    assert row.canonical_payload["side"] == "BUY"
+    assert row.canonical_payload["quantity"] == "10.500000"
+    assert row.canonical_payload["limit_price"] == "1234.567890"
+    assert row.canonical_payload["trigger_price"] is None
+    assert row.minted_at.tzinfo is not None
+    assert row.expires_at.tzinfo is not None
 
 
 def test_fill_round_trip_preserves_decimal_precision() -> None:

@@ -48,6 +48,8 @@ corresponding `paper.fills`/`paper.positions` update and the
 
 ## Testing
 `test_duplicate_proposal_submission_creates_exactly_one_order` (Phase 1
-Step 14) submits the same `proposal_id` twice concurrently and asserts a
-single `orders` row — exercising all three uniqueness constraints above at
-once.
+Step 9, ADR-011 - `tests/unit/exec_paper/test_gateway.py`, unit level
+against in-memory fakes; `tests/integration/db/test_paper_execution_gateway.py`,
+Docker-gated, against real PostgreSQL concurrency) submits the same
+`proposal_id` twice concurrently and asserts a single `orders` row —
+exercising all three uniqueness constraints above at once.

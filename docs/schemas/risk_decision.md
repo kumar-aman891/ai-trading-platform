@@ -31,9 +31,10 @@ to create or edit a row here directly — a `RiskDecision` is always a
 side-effect of evaluating a `TradeProposal`, never an independent write.
 
 ## Testing
-`test_live_proposal_rejects_on_every_rule` and
-`test_risk_engine_rejects_when_any_rule_indeterminate` (Phase 1 safety
-suite, Step 11) exercise this table's invariants directly: a LIVE-mode
+`test_live_proposal_can_never_be_approved` and
+`test_any_indeterminate_causes_overall_reject`
+(`tests/unit/domain/test_risk_engine.py`, Phase 1 Step 4) exercise this
+table's invariants directly: a LIVE-mode
 proposal's decision (once `live.risk_decisions` exists, Phase 4) has
 `outcome = 'REJECTED'` with every `rule_results` entry either `REJECT` or
 the pre-aggregation `INDETERMINATE` in the evidence detail.

@@ -21,7 +21,7 @@ from [docs/SECURITY.md](../SECURITY.md).
 - `UNIQUE (lower(username))`
 - No default/seeded user in any migration (asserted by
   `test_settings_refuse_to_start_with_live_mode_or_broker_credentials`'s
-  sibling bootstrap test, Phase 1 Step 13).
+  sibling bootstrap test, Phase 1 Step 8).
 
 ## Security boundary
 Holds `password_hash` only — never a plaintext password, never a session

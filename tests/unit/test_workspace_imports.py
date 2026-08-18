@@ -32,6 +32,11 @@ PHASE_1_PACKAGES = [
     "atp_api.services",
     "atp_api.bootstrap",
     "atp_exec_paper",
+    "atp_exec_paper.gateway",
+    "atp_exec_paper.kill_switch_adapter",
+    "atp_exec_paper.risk_runner",
+    "atp_exec_paper.simulator",
+    "atp_exec_paper.uow",
     "atp_worker",
 ]
 

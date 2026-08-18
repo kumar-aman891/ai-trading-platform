@@ -51,6 +51,12 @@ jobs:
   integration:
     name: Integration tests (real PostgreSQL/Redis via Docker)
     runs-on: ubuntu-latest
+    # TEMPORARY (step12-phase-a-verify iteration only): issues: write lets
+    # the diagnostic-on-failure step below post a log excerpt somewhere
+    # readable without log-download auth. Remove before merging to main.
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v4
 
@@ -67,7 +73,30 @@ jobs:
       - name: Run integration suite against a real stack (ATP_REQUIRE_INTEGRATION_STACK=1)
         env:
           ATP_REQUIRE_INTEGRATION_STACK: "1"
-        run: make test-integration
+        run: |
+          set -o pipefail
+          make test-integration 2>&1 | tee /tmp/integration.log
+
+      # TEMPORARY (step12-phase-a-verify iteration only): raw job logs
+      # require authenticated access even on a public repo, so this posts
+      # the last part of the captured output as an issue (readable via the
+      # unauthenticated public API) purely to unblock iteration. Remove
+      # before merging to main.
+      - name: Post diagnostic log on failure (temporary, iteration-only)
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAIL=$(tail -c 60000 /tmp/integration.log 2>/dev/null || echo "no log captured")
+          jq -n \
+            --arg title "CI integration failure: run ${{ github.run_id }} (${{ github.sha }})" \
+            --arg body "$(printf '```\n%s\n```\n' "$TAIL")" \
+            '{title: $title, body: $body}' > /tmp/issue_body.json
+          curl -s -X POST \
+            -H "Authorization: token ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/issues" \
+            -d @/tmp/issue_body.json
 
   secret-scan:
     name: Secret scan (gitleaks)

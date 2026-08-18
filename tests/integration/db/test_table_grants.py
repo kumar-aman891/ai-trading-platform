@@ -11,8 +11,14 @@ drifts from its own documented intent is caught.
 
 from __future__ import annotations
 
+import os
+import subprocess
+import sys
+
 import psycopg
 import pytest
+
+from tests.integration.db.conftest import _PERSISTENCE_DIR, _as_sync_psycopg_url
 
 # table -> role -> expected privileges. Every table `atp_paper_exec` or
 # `atp_worker` has no entry for is asserted to have zero privileges (it
@@ -175,3 +181,54 @@ def test_worker_session_access_is_column_scoped(
             "UPDATE core.sessions SET revoked_at = now() WHERE session_id_hash = 'nonexistent'"
         )
     worker_connection.rollback()
+
+
+def _run_alembic(owner_dsn: str, *args: str) -> None:
+    env = os.environ.copy()
+    env["ATP_MIGRATION_DATABASE_URL"] = _as_sync_psycopg_url(owner_dsn)
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "-c", "alembic.ini", *args],
+        cwd=_PERSISTENCE_DIR,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if result.returncode != 0:
+        pytest.fail(
+            f"alembic {' '.join(args)} failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+        )
+
+
+def test_downgrade_of_0003_does_not_regrant_audit_mutation_privileges(
+    migrated_database: str, owner_dsn: str, owner_connection: psycopg.Connection
+) -> None:
+    """Regression test for a defect found during the Phase 1 Step 12 Phase A
+    reconciliation: `0003_table_grants.py`'s `downgrade()` used to re-grant
+    UPDATE/DELETE/TRUNCATE on `audit.audit_events` to every application
+    role - but the Step 5 coarse baseline
+    (ops/sql/roles_and_schemas.sql.tmpl) never granted those in the first
+    place, only SELECT/INSERT. A downgrade would therefore have left the
+    database strictly MORE permissive than it had ever been at any point in
+    this migration chain - defense-in-depth erosion of the append-only
+    boundary ADR-010 relies on. Downgrades past 0003, checks the three
+    application roles directly with `has_table_privilege` (not just
+    `atp_worker` - the defect affected `atp_api` and `atp_paper_exec`
+    identically), then re-upgrades to head so later tests in this session
+    see the expected head state regardless of outcome."""
+    try:
+        _run_alembic(owner_dsn, "downgrade", "0002_seed_fixture_instruments")
+        with owner_connection.cursor() as cur:
+            for role in ("atp_api", "atp_paper_exec", "atp_worker"):
+                for privilege in ("UPDATE", "DELETE", "TRUNCATE"):
+                    cur.execute(
+                        "SELECT has_table_privilege(%s, 'audit.audit_events', %s)",
+                        (role, privilege),
+                    )
+                    (has_privilege,) = cur.fetchone()  # type: ignore[misc]
+                    assert (
+                        has_privilege is False
+                    ), f"downgrade() must not grant {privilege} on audit.audit_events to {role}"
+        owner_connection.rollback()
+    finally:
+        _run_alembic(owner_dsn, "upgrade", "head")

@@ -10,9 +10,11 @@ actually seeded (Phase 1: migration 0002's ~20 FIXTURE rows).
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from decimal import Decimal
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atp_persistence.models.core import InstrumentRow
@@ -40,3 +42,18 @@ class SqlAlchemyInstrumentRepository:
             lot_size=row.lot_size,
             tick_size=row.tick_size,
         )
+
+    async def list_active(self) -> Sequence[InstrumentRow]:
+        """Phase 1 Step 10's `GET /api/v1/instruments` read and the
+        `POST /api/v1/paper/proposals` `instrument_id` existence check.
+        Returns the ORM row directly (unlike `get`, which projects to the
+        narrower `InstrumentSnapshot` `atp_exec_paper.risk_runner` needs) -
+        the API's `instruments` service reads more columns
+        (`symbol`/`name`/`exchange`/`segment`) than `risk_runner` does, and
+        this module has no domain type to map into (module docstring)."""
+        result = await self._session.execute(
+            select(InstrumentRow)
+            .where(InstrumentRow.active_to.is_(None))
+            .order_by(InstrumentRow.symbol)
+        )
+        return result.scalars().all()

@@ -23,7 +23,7 @@ from atp_api.middleware.rate_limit import InMemoryRateLimiter, RateLimiter, Rate
 from atp_api.middleware.request_logging import RequestLoggingMiddleware
 from atp_api.middleware.security_headers import SecurityHeadersMiddleware
 from atp_api.openapi import API_DESCRIPTION, API_TITLE, API_VERSION, OPENAPI_TAGS
-from atp_api.routers import audit, auth, health, kill_switches, system
+from atp_api.routers import audit, auth, health, instruments, kill_switches, paper, system
 from atp_persistence.db import create_engine, make_session_factory
 from atp_platform.asgi import CorrelationIdMiddleware
 from atp_platform.config import Settings
@@ -93,6 +93,8 @@ def create_app(
     app.include_router(kill_switches.router)
     app.include_router(audit.router)
     app.include_router(auth.router)
+    app.include_router(instruments.router)
+    app.include_router(paper.router)
 
     limiter = rate_limiter or InMemoryRateLimiter(
         limit=resolved_api_settings.rate_limit_requests,

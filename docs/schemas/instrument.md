@@ -37,6 +37,13 @@ Per `.claude/rules/04-ai.md`, instrument names/symbols are still treated as
 this table stores them, it does not sanitize them for prompt-injection
 purposes; that is the AI tool layer's responsibility (not built in Phase 1).
 
+**Reader (Phase 1 Step 10):** `GET /api/v1/instruments`
+(`atp_api.routers.instruments`) requires `Permission.READ_INSTRUMENTS` and
+lists every currently-active (`active_to IS NULL`) row. The same lookup
+backs `POST /api/v1/paper/proposals`' `instrument_id` existence check
+(`atp_api.services.paper_proposals`) — an unknown `instrument_id` is
+rejected before a `TradeProposal` is ever constructed.
+
 ## Phase 1 note
 Rows are `provider = 'FIXTURE'`, ~20 seeded NSE equities, inserted by a
 seed migration. This keeps provenance honest at the row level — nothing

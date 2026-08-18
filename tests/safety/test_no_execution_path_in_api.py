@@ -63,11 +63,16 @@ def test_no_execution_live_directory_exists() -> None:
 
 # Phase 1 Step 8 introduces exactly two POST routes - login and logout -
 # both authentication plumbing, neither capable of creating/mutating an
-# Order, a RiskConfig, or any kill-switch state. Every other route in the
-# app (health, system, kill-switches, audit, /me) stays GET-only.
+# Order, a RiskConfig, or any kill-switch state. Phase 1 Step 10 adds a
+# third: POST /api/v1/paper/proposals records a TradeProposal only - it
+# never evaluates risk, mints an ApprovedOrderIntent, or writes an Order/
+# Fill/Position (ADR-012, tests/safety/test_proposal_intake_is_not_a_risk_gate.py).
+# Every other route in the app (health, system, kill-switches, audit, /me,
+# instruments, the paper ledger reads) stays GET-only.
 _ALLOWED_MUTATING_ROUTES: dict[str, frozenset[str]] = {
     "/api/v1/auth/login": frozenset({"POST"}),
     "/api/v1/auth/logout": frozenset({"POST"}),
+    "/api/v1/paper/proposals": frozenset({"POST"}),
 }
 
 

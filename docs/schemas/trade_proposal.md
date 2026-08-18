@@ -40,6 +40,19 @@ and readable by `atp_exec_paper`. `atp_exec_paper` never accepts proposal
 load this row itself (see [order_intent.md](order_intent.md) and the plan's
 §4 module M5 execution sequence).
 
+**Real writer (Phase 1 Step 10, ADR-012):**
+`POST /api/v1/paper/proposals` (`atp_api.routers.paper`,
+`atp_api.services.paper_proposals`) requires `Permission.SUBMIT_PAPER_PROPOSAL`
+and performs **structural validation only** — it never evaluates risk,
+never calls `atp_domain.risk.engine.evaluate`/`mint_intent_for_decision`,
+never imports `atp_domain.intents` at all, and is not gated on the kill switch (`docs/adr/ADR-012-proposal-intake-is-not-a-risk-gate.md`).
+`mode`, `proposal_id`, and `created_at` are always server-set;
+`created_by` is the authenticated principal's `user_id`. A 2xx response
+means *recorded*, never *approved* — the risk decision is written
+separately, later, by `atp_exec_paper`'s claim loop (ADR-011). Read back via
+`GET /api/v1/paper/proposals`/`GET /api/v1/paper/proposals/{proposal_id}`,
+which nest the resulting `RiskDecision`/`Order`/`Fill` (if any exist yet).
+
 ## Testing
 `quantity`, `limit_price` are `Decimal` end-to-end (Python `Decimal` ↔
 `NUMERIC`), never `float`, so P&L and sizing tests are deterministic

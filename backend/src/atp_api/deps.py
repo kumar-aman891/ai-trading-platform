@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from atp_api.config import ApiSettings
 from atp_api.errors import (
+    CsrfError,
     ForbiddenError,
     RateLimitExceededError,
     ServiceUnavailableError,
@@ -31,7 +32,8 @@ from atp_api.errors import (
     SessionInvalidError,
 )
 from atp_api.middleware.rate_limit import RateLimiter
-from atp_api.security.cookies import SESSION_COOKIE_NAME
+from atp_api.security.cookies import CSRF_COOKIE_NAME, SESSION_COOKIE_NAME
+from atp_api.security.csrf import csrf_tokens_match
 from atp_api.security.rbac import Permission, has_permission
 from atp_api.services.auth import record_authorization_denial
 from atp_api.services.sessions import validate_and_renew_session
@@ -40,7 +42,14 @@ from atp_domain.ids import IdGenerator, UUIDv7Generator
 from atp_persistence.db import UnitOfWork, read_only_session, unit_of_work
 from atp_persistence.repositories import (
     SqlAlchemyAuditEventRepository,
+    SqlAlchemyCashLedgerRepository,
+    SqlAlchemyFillRepository,
+    SqlAlchemyInstrumentRepository,
     SqlAlchemyKillSwitchStateRepository,
+    SqlAlchemyOrderRepository,
+    SqlAlchemyPositionRepository,
+    SqlAlchemyRiskDecisionRepository,
+    SqlAlchemyTradeProposalRepository,
 )
 from atp_platform.config import Settings
 from atp_platform.correlation import get_correlation_id, new_correlation_id
@@ -101,6 +110,62 @@ async def get_kill_switch_repository(
     session: Annotated[AsyncSession, Depends(get_db_session)],
 ) -> SqlAlchemyKillSwitchStateRepository:
     return SqlAlchemyKillSwitchStateRepository(session)
+
+
+# ---------------------------------------------------------------------------
+# PAPER trade-proposal intake and ledger reads (Phase 1 Step 10, ADR-012)
+# ---------------------------------------------------------------------------
+#
+# Every dependency below is built over `get_db_session`'s read-only session
+# - even `get_instrument_repository`, which `paper_proposals.submit_proposal`
+# also uses for its pre-insert existence check. That check deliberately
+# runs on a separate read-only session from the `UnitOfWork` the insert
+# itself uses (`persistence/db.py` is unmodified by this milestone - see
+# ADR-012/planning notes): a plain read has no need of a write transaction,
+# and `core.instruments` has no Phase 1 delete route for the two reads to
+# race against.
+
+
+async def get_instrument_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SqlAlchemyInstrumentRepository:
+    return SqlAlchemyInstrumentRepository(session)
+
+
+async def get_trade_proposal_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SqlAlchemyTradeProposalRepository:
+    return SqlAlchemyTradeProposalRepository(session)
+
+
+async def get_risk_decision_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SqlAlchemyRiskDecisionRepository:
+    return SqlAlchemyRiskDecisionRepository(session)
+
+
+async def get_order_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SqlAlchemyOrderRepository:
+    return SqlAlchemyOrderRepository(session)
+
+
+async def get_fill_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SqlAlchemyFillRepository:
+    return SqlAlchemyFillRepository(session)
+
+
+async def get_position_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SqlAlchemyPositionRepository:
+    return SqlAlchemyPositionRepository(session)
+
+
+async def get_cash_ledger_repository(
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+) -> SqlAlchemyCashLedgerRepository:
+    return SqlAlchemyCashLedgerRepository(session)
 
 
 # ---------------------------------------------------------------------------
@@ -195,3 +260,21 @@ def require_permission(
         return principal
 
     return _dependency
+
+
+async def enforce_csrf(
+    request: Request,
+    principal: Annotated[AuthenticatedPrincipal, Depends(get_current_principal)],
+) -> None:
+    """The reusable form of the double-submit check `atp_api.services.auth
+    .logout` already performs inline (`atp_api.security.csrf`'s module
+    docstring: "every future authenticated state-changing route must
+    follow the same rule"). Every state-changing route beyond login/logout
+    runs with an authenticated session already in hand, so - like logout,
+    unlike login - it is CSRF-checked unconditionally."""
+    if not csrf_tokens_match(
+        header_value=request.headers.get("x-csrf-token"),
+        cookie_value=request.cookies.get(CSRF_COOKIE_NAME),
+        expected=principal.csrf_token,
+    ):
+        raise CsrfError()

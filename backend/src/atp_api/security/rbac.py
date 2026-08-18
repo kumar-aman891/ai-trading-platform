@@ -32,8 +32,7 @@ requiring a schema migration every time a new permission is introduced.
 `live_trader` is one such future-capability role: it is valid and
 assignable in Phase 1 (`docs/schemas/user.md`), but in Phase 1 it has
 **zero** live-trading capability - `ROLE_PERMISSIONS[ROLE_LIVE_TRADER]` is
-*exactly* `ROLE_PERMISSIONS[ROLE_RESEARCHER]` and
-`ROLE_PERMISSIONS[ROLE_PAPER_TRADER]` (asserted directly by
+*exactly* `ROLE_PERMISSIONS[ROLE_PAPER_TRADER]` (asserted directly by
 `tests/unit/security/test_rbac.py`), because no live route or live
 execution service exists for any permission to authorize (ADR-005,
 ADR-006, ADR-008). No Phase-1 permission grants live execution - see
@@ -41,6 +40,21 @@ ADR-006, ADR-008). No Phase-1 permission grants live execution - see
 on. Widening `live_trader`'s permissions, or introducing a permission that
 authorizes something live-execution-shaped, is a Phase 4+ decision gated
 on a live execution gateway actually existing, not a Step 8 one.
+
+Phase 1 Step 10 adds PAPER trade-proposal submission and ledger reads.
+Being able to *propose* a PAPER trade is categorically distinct from being
+able to execute one: `atp_api` never evaluates risk or mints an
+`ApprovedOrderIntent` (ADR-012, "Proposal Intake Is Not a Risk Gate") -
+every proposal any role submits still passes through the same
+deterministic `atp_domain.risk.engine` inside `atp_exec_paper` before
+anything is ever filled. `_PAPER_TRADING_PERMISSIONS` is therefore granted
+to `paper_trader`, `live_trader`, and `administrator` alike - all three
+`ROLE_PERMISSIONS` entries derive from the same frozenset object below, so
+they cannot drift apart by editing one role's row in isolation. Granting
+it is still **zero** live-trading capability: submitting a PAPER proposal
+is not "LIVE"- or "EXECUTE"-shaped by any of this module's own
+definitions below, and `researcher` (which does trading research but does
+not trade) deliberately does not receive it.
 """
 
 from __future__ import annotations
@@ -65,21 +79,27 @@ VALID_ROLES: frozenset[str] = frozenset(
 
 
 class Permission(StrEnum):
-    """Deliberately small in Phase 1 - one permission per route this step
-    actually protects, plus two administrator-only permissions the schema
-    design anticipates (`MANAGE_USERS`, `MANAGE_SECURITY`) but no Phase 1
-    route yet exercises.
+    """One permission per route this and the prior step actually protect,
+    plus two administrator-only permissions the schema design anticipates
+    (`MANAGE_USERS`, `MANAGE_SECURITY`) but no Phase 1 route yet exercises.
 
     No Phase-1 permission grants live execution. No `EXECUTE_LIVE`/
     `MANAGE_LIVE_*`/any live-trading-shaped constant exists anywhere in
     this enum - there is nothing for any role, including `administrator`
     or `live_trader`, to be granted that would activate live trading, and
-    `tests/safety/test_rbac_server_side.py` mechanically asserts that no
-    member of this enum's value ever contains "LIVE" or "EXECUTE"."""
+    `tests/unit/security/test_rbac.py` mechanically asserts that no member
+    of this enum's value ever contains "LIVE" or "EXECUTE". This holds for
+    `SUBMIT_PAPER_PROPOSAL` too: recording a PAPER proposal is not
+    executing anything (ADR-012) - the deterministic risk engine inside
+    `atp_exec_paper`, never `atp_api`, is what may eventually mint an
+    `ApprovedOrderIntent` for it."""
 
     READ_SYSTEM = "READ_SYSTEM"
     READ_AUDIT = "READ_AUDIT"
     READ_KILL_SWITCH = "READ_KILL_SWITCH"
+    READ_INSTRUMENTS = "READ_INSTRUMENTS"
+    SUBMIT_PAPER_PROPOSAL = "SUBMIT_PAPER_PROPOSAL"
+    READ_PAPER_LEDGER = "READ_PAPER_LEDGER"
     MANAGE_USERS = "MANAGE_USERS"
     MANAGE_SECURITY = "MANAGE_SECURITY"
 
@@ -88,17 +108,31 @@ _READ_ONLY_OBSERVER_PERMISSIONS: frozenset[Permission] = frozenset(
     {Permission.READ_SYSTEM, Permission.READ_AUDIT, Permission.READ_KILL_SWITCH}
 )
 
+# Phase 1 Step 10: the capability to submit a PAPER proposal and read the
+# PAPER ledger (own transactions, positions, cash) - reused, as the same
+# frozenset object, by every role below that receives it (`paper_trader`,
+# `live_trader`, `administrator`) so the three cannot drift apart by
+# editing one role's row in isolation (rbac module docstring).
+_PAPER_TRADING_PERMISSIONS: frozenset[Permission] = frozenset(
+    {
+        Permission.READ_INSTRUMENTS,
+        Permission.SUBMIT_PAPER_PROPOSAL,
+        Permission.READ_PAPER_LEDGER,
+    }
+)
+
 # `ROLE_LIVE_TRADER` is deliberately the *same object* as
-# `ROLE_RESEARCHER`/`ROLE_PAPER_TRADER`'s permission set below, not merely
-# an equal-by-value copy - there is exactly one "Phase 1 observer"
-# permission set in this table, and live_trader is a member of it like any
-# other non-administrator role, never a distinct, wider one.
+# `ROLE_PAPER_TRADER`'s permission set below, not merely an equal-by-value
+# copy - live_trader has no Phase 1 capability beyond what paper_trader
+# already has, because no live route or live execution service exists yet
+# for any permission to authorize.
 ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
     ROLE_VIEWER: frozenset({Permission.READ_SYSTEM}),
-    ROLE_RESEARCHER: _READ_ONLY_OBSERVER_PERMISSIONS,
-    ROLE_PAPER_TRADER: _READ_ONLY_OBSERVER_PERMISSIONS,
-    ROLE_LIVE_TRADER: _READ_ONLY_OBSERVER_PERMISSIONS,
+    ROLE_RESEARCHER: _READ_ONLY_OBSERVER_PERMISSIONS | {Permission.READ_INSTRUMENTS},
+    ROLE_PAPER_TRADER: _READ_ONLY_OBSERVER_PERMISSIONS | _PAPER_TRADING_PERMISSIONS,
+    ROLE_LIVE_TRADER: _READ_ONLY_OBSERVER_PERMISSIONS | _PAPER_TRADING_PERMISSIONS,
     ROLE_ADMINISTRATOR: _READ_ONLY_OBSERVER_PERMISSIONS
+    | _PAPER_TRADING_PERMISSIONS
     | {Permission.MANAGE_USERS, Permission.MANAGE_SECURITY},
 }
 

@@ -80,3 +80,11 @@ invariant. `docs/ARCHITECTURE.md` §2's critical execution path
 (`TradeProposal -> RiskDecision -> ApprovedOrderIntent -> ...`) is realized
 end to end for PAPER by this ADR; the equivalent LIVE path remains entirely
 unbuilt (ADR-005, ADR-008).
+
+**Amendment (Phase 1 Step 10, ADR-012):** at the time this ADR was written,
+the claim loop had no production producer - `paper.trade_proposals` had no
+writer outside tests. `POST /api/v1/paper/proposals` (ADR-012) is now that
+producer. The claim loop itself is unchanged by Step 10 (`execution/paper/`
+carries a zero diff for that milestone); only the number of real candidate
+rows `list_unevaluated_paper_proposal_ids` can find changed, from
+permanently zero to whatever `atp_api` has recorded.

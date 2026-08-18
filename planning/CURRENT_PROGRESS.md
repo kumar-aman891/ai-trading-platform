@@ -1,10 +1,10 @@
 # Current Progress
 
-Last committed checkpoint: `72b5a9324a64dc88cafd8a1063c7a2775577e945`
-("feat: complete phase 1 application foundation and authentication" - Steps
-7+8 combined). Step 9 (below) is implemented on top of this commit but is
-**not yet committed** - this document describes the current working tree,
-not a new checkpoint commit.
+Last committed checkpoint: `9fb94cdaf2224db6951cb58a409429781437234f`
+("feat: complete phase 1 paper execution gateway" - Step 9). Step 10
+(below) is implemented on top of this commit but is **not yet committed**
+- this document describes the current working tree, not a new checkpoint
+commit.
 
 **Numbering note**: an older, external "approved Phase 1 plan" numbered
 steps differently (risk engine at its Step 11, intent minting at its Step
@@ -33,6 +33,7 @@ step," not a literal promise about which step number will do it.
 - Step 7 application/FastAPI foundation (read-only)
 - Step 8 authentication, session management, RBAC, and CSRF
 - Step 9 PAPER execution gateway (ADR-011)
+- Step 10 PAPER trade-proposal intake and ledger API (ADR-012)
 
 ## Current repository state
 
@@ -45,7 +46,45 @@ step," not a literal promise about which step number will do it.
 - No backtesting
 - No automated strategies (proposals are still human-created; no strategy
   registry/signal engine exists to generate one)
-- No new API route (Step 9's `atp_api` diff is zero, per ADR-011 §2 D2)
+- Step 9's `atp_api` diff was zero (ADR-011 §2 D2); Step 10 adds `atp_api`'s
+  first business mutation route, `POST /api/v1/paper/proposals`, and it
+  performs no risk evaluation of its own (ADR-012)
+- PAPER trade-proposal intake and ledger API implemented (Step 10, ADR-012):
+  `POST /api/v1/paper/proposals` (`atp_api.routers.paper`,
+  `atp_api.services.paper_proposals`) closes the gap Step 9 left open -
+  `paper.trade_proposals` had no production writer, so `atp_exec_paper`'s
+  ADR-011 claim loop had zero real candidates to find. Intake performs
+  **structural validation only**: request DTO parsing, `TradeProposal`'s
+  own `__post_init__` invariants, and an `instrument_id` existence check
+  against `core.instruments` - it never imports `atp_domain.intents` and
+  never calls `atp_domain.risk.engine.evaluate`/`mint_intent_for_decision`
+  (mechanically asserted, `tests/safety/test_proposal_intake_is_not_a_risk_gate.py`).
+  `mode`, `proposal_id`, and `created_at` are always server-set;
+  `created_by` is the authenticated principal's `user_id` - none of the
+  four is ever caller-supplied. Idempotency is enforced by
+  `paper.trade_proposals`' `UNIQUE (client_request_id)` constraint (insert,
+  catch `IntegrityError`, compare - never check-then-insert, the Step 9
+  lesson): an identical resubmission replays `200` with the original
+  `proposal_id`; a conflicting one gets `409`. CSRF-protected exactly like
+  `POST /api/v1/auth/logout` (`atp_api.deps.enforce_csrf`, a new reusable
+  dependency). Five new GET routes read the result back without ever
+  touching `atp_exec_paper`: `GET /api/v1/instruments` (existence-check
+  data source, also user-facing), `GET /api/v1/paper/proposals[/{id}]`
+  (nests the resulting `RiskDecision`/`Order`/`Fill` once
+  `atp_exec_paper` has evaluated/executed them - `None` until then, never
+  an error), `GET /api/v1/paper/positions`, `GET /api/v1/paper/cash`. No
+  route path contains `order`, `execute`, or `/live`
+  (`tests/safety/test_no_execution_path_in_api.py`'s pre-existing
+  substring ban, preserved by nesting order/fill state inside the
+  proposal-detail response instead of a `/paper/orders` route). Three new
+  `Permission` members (`READ_INSTRUMENTS`, `SUBMIT_PAPER_PROPOSAL`,
+  `READ_PAPER_LEDGER`), granted as one reusable
+  `_PAPER_TRADING_PERMISSIONS` frozenset to `paper_trader`, `live_trader`,
+  and `administrator` alike (`atp_api.security.rbac`) - `live_trader`
+  remains permission-identical to `paper_trader` (still zero live-execution
+  capability; submitting a PAPER proposal is not one). `execution/paper/`
+  (`atp_exec_paper`) carries a **zero diff** for this milestone - the
+  claim loop itself is unchanged; it simply now has real rows to find.
 - PAPER execution gateway implemented (Step 9, ADR-011):
   `execution/paper/src/atp_exec_paper/` is no longer an empty stub -
   `simulator.py` (deliberately fake fill simulator), `risk_runner.py`
@@ -151,8 +190,62 @@ step," not a literal promise about which step number will do it.
   `atp_api.security.rbac`, since Phase 1 has no other service that needs
   it (unlike `Money`/`RiskConfig`, which are genuine cross-cutting trading
   domain concepts).
+- ADR-012 (Step 10): proposal intake is deliberately not a risk gate - a
+  2xx from `POST /api/v1/paper/proposals` means recorded, not approved.
+  `atp_api` may call neither `atp_domain.risk.engine.evaluate` nor
+  `mint_intent_for_decision`, and may not import `atp_domain.intents` at
+  all - but `atp_domain.risk.engine.RiskDecision` (a plain, frozen
+  dataclass, not an operation) is a legitimate import for
+  `atp_api.services.paper_ledger`'s read-only ledger view; reading a
+  decision someone else computed is not evaluating one. Intake is also not
+  gated on the kill switch - an engaged `PAPER` switch instead produces a
+  persisted, auditable `RiskDecision` from `atp_exec_paper`, keeping
+  exactly one authoritative risk boundary rather than two.
+- The instrument-existence check in `POST /api/v1/paper/proposals` runs on
+  a separate read-only session from the `UnitOfWork` the insert itself
+  uses (`atp_api.deps.get_instrument_repository` vs `get_unit_of_work`) -
+  `persistence/src/atp_persistence/db.py` is unmodified by Step 10; a
+  plain read has no need of a write transaction, and `core.instruments`
+  has no Phase 1 delete route for the two reads to race against.
+- `atp_persistence.repositories.trade_proposals.list_for_mode`/
+  `fills.list_by_order`/`positions.list_all`/`instruments.list_active` are
+  Step 10's only persistence-layer additions - all additive read methods
+  on existing repository classes; no new table, no new migration.
 
 ## Completed verification
+
+- Test count grew again at the Step 10 checkpoint: new no-DB tests under
+  `tests/unit/api/` (`test_instruments.py`, `test_paper_proposals.py`,
+  `test_paper_ledger.py`, plus `fakes.py`/`conftest.py` extensions for the
+  six new read-repository fakes and a `FakeTradeProposalRepository` that
+  raises a real `sqlalchemy.exc.IntegrityError` on a duplicate
+  `client_request_id`), `tests/safety/test_proposal_intake_is_not_a_risk_gate.py`
+  (AST import/call scan plus schema-shape assertions), and reconciliation
+  edits to `tests/safety/test_no_execution_path_in_api.py`,
+  `tests/safety/test_rbac_server_side.py`, `tests/unit/api/test_routing.py`,
+  and `tests/unit/security/test_rbac.py` for the new route/permission
+  surface; +3 Docker-gated integration tests in
+  `tests/integration/db/test_paper_proposal_intake.py` (real-`atp_api`-role
+  round trip, genuine `UNIQUE(client_request_id)` concurrency via
+  `asyncio.gather`, and the full intake -> `atp_exec_paper.run_once` ->
+  ledger-read loop).
+- ruff format / ruff check / mypy --strict / import-linter (4/4 kept,
+  unchanged and unrelaxed) / pytest (455 passed, 77 skipped) / pre-commit
+  (14 hooks incl. gitleaks) all clean at the Step 10 checkpoint - see the
+  Step 10 implementation report for this session's actual run results.
+  `git diff --stat -- execution/paper` is empty.
+- Docker-dependent tests skipped when Docker is unavailable - not run, not
+  faked as passing. The full intake path, RBAC matrix (including the new
+  `SUBMIT_PAPER_PROPOSAL`/`READ_PAPER_LEDGER`/`READ_INSTRUMENTS`
+  permissions), idempotency/replay/conflict behavior, and CSRF enforcement
+  are exercised without Docker through `tests/unit/api/fakes.py`'s
+  extended fake set; the genuine real-PostgreSQL round trip (the real
+  `atp_api` role's actual grants, and true `asyncio.gather` concurrency
+  across two connections) still needs
+  `tests/integration/db/test_paper_proposal_intake.py`, skip-gated exactly
+  like every other Step 5+ Docker-dependent test.
+
+### Step 9 checkpoint verification (retained for history)
 
 - Test count grew again at the Step 9 checkpoint: new no-DB tests under
   `tests/unit/exec_paper/` (`fakes.py` in-memory `PaperExecutionUnitOfWork`
@@ -180,10 +273,25 @@ step," not a literal promise about which step number will do it.
 
 - No password-change route exists yet - a bootstrap admin's
   `must_change_password=True` is surfaced in `GET /api/v1/auth/me` but
-  nothing yet lets them act on it. Deferred rather than blocking login
-  entirely (which would be a lockout, not a safety improvement) until a
-  future `atp_api` mutation route exists (Step 9 added no new `atp_api`
-  route - ADR-011 §2 D2).
+  nothing yet lets them act on it. `POST /api/v1/paper/proposals` (Step 10)
+  is the first mutation route beyond login/logout, so this is no longer
+  blocked on "no mutation route exists" - just not yet built.
+- `tests/safety/README.md`'s Step 10 reconciliation found two invariants
+  genuinely still missing (not merely mislabeled): #3
+  (`test_no_foreign_key_crosses_mode_schemas` - no test exists; trivially
+  true today only because `live` holds zero tables) and #8
+  (`test_secret_never_appears_in_logs` - only the redaction *function* is
+  unit-tested, not the actual structlog pipeline end to end).
+- `GET /api/v1/paper/proposals`'s list view calls
+  `risk_decisions.get_by_proposal`/`orders.get_by_proposal`/
+  `fills.list_by_order` once per returned proposal (`paper_ledger.list_proposals`)
+  - an N+1 query pattern, acceptable at Phase 1's scale (`DEFAULT_PAGE_SIZE
+  = 50`) but a candidate for a joined/batched read if the ledger ever needs
+  to page through significantly more rows.
+- `paper.trade_proposals.strategy_id`/`source_signal_id` remain unset by
+  intake (always `None`) - Step 10 intentionally does not pre-empt the
+  still-nonexistent strategy/signal engine; those columns attach later with
+  no migration once one exists.
 - Rate limiting for login remains in-process/in-memory
   (`ApiSettings.login_rate_limit_*`), same single-process caveat as the
   Step 7 general limiter.
@@ -247,14 +355,20 @@ step," not a literal promise about which step number will do it.
 
 ## Next implementation step
 
-STEP 10 - not yet scoped in this document. Candidates surfaced during the
-Step 9 reconciliation but deliberately not started: an API route to submit
-a `TradeProposal` (`POST /api/v1/paper/proposals` - note this would need a
-route name that avoids the substring "order",
-`tests/safety/test_no_execution_path_in_api.py` forbids it in any path);
-`atp_worker` (session reap / audit integrity check / retention jobs); or an
-instrument-master loader. Do not begin without an explicit instruction and
-a fresh read of CLAUDE.md and the relevant ADRs/rules.
+STEP 11 - not yet scoped in this document. Candidates surfaced during the
+Step 10 reconciliation but deliberately not started: `atp_worker` (session
+reap / audit integrity check / retention jobs - the strongest fully-
+unblocked runner-up; `atp_worker` retains real `UPDATE` privilege on
+`core.job_queue`, unlike ADR-011's situation, so a genuine
+`SELECT ... FOR UPDATE SKIP LOCKED` claim loop is possible there); a
+frontend scaffold (Node/npm not installed in this environment, and there
+is now a real API surface worth rendering); or a market-data/egress policy
+decision (blocked simultaneously by import-linter contract #4's no-egress
+rule, `Settings` refusing to start with any `KITE_*` var, and ADR-006's
+unreviewed-MCP gate - starting it is a phase boundary needing its own ADR
+and explicit authorization, not something to slip into a step). Do not
+begin without an explicit instruction and a fresh read of CLAUDE.md and the
+relevant ADRs/rules.
 
 ## Critical instruction
 

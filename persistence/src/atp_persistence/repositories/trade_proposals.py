@@ -13,6 +13,7 @@ fabricated default value.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,6 +22,8 @@ from atp_domain.proposals import TradeProposal
 from atp_domain.types import Mode, ProposalId
 from atp_persistence.mappers import row_to_trade_proposal, trade_proposal_to_row
 from atp_persistence.models.paper import RiskDecisionRow, TradeProposalRow
+
+_MAX_LIST_LIMIT = 200
 
 
 class SqlAlchemyTradeProposalRepository:
@@ -66,3 +69,24 @@ class SqlAlchemyTradeProposalRepository:
             .limit(limit)
         )
         return [row[0] for row in result.all()]
+
+    async def list_for_mode(
+        self, mode: Mode, *, before: datetime | None, limit: int
+    ) -> Sequence[TradeProposal]:
+        """Phase 1 Step 10's `GET /api/v1/paper/proposals` ledger read.
+        Newest first (`created_at DESC`), keyset-paginated via `before` -
+        mirrors `SqlAlchemyAuditEventRepository.list_recent`'s existing
+        pattern rather than offset pagination, for the same reason: stable
+        paging as new proposals are appended."""
+        bounded_limit = max(1, min(limit, _MAX_LIST_LIMIT))
+        stmt = (
+            select(TradeProposalRow)
+            .where(TradeProposalRow.mode == mode.value)
+            .order_by(TradeProposalRow.created_at.desc(), TradeProposalRow.proposal_id.desc())
+        )
+        if before is not None:
+            stmt = stmt.where(TradeProposalRow.created_at < before)
+        stmt = stmt.limit(bounded_limit)
+
+        result = await self._session.execute(stmt)
+        return [row_to_trade_proposal(row) for row in result.scalars().all()]

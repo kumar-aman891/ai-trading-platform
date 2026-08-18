@@ -22,8 +22,19 @@ _ATP_API_SRC = _REPO_ROOT / "backend" / "src" / "atp_api"
 # via `get_current_principal` (authentication) rather than
 # `require_permission` (authorization) - there is no *permission* for "is
 # logged in," and login/logout are deliberately reachable by anyone
-# (that's the point of a login route).
-_ROUTERS_REQUIRING_EXPLICIT_PERMISSIONS = ("system.py", "kill_switches.py", "audit.py")
+# (that's the point of a login route). `instruments.py`/`paper.py` are
+# Phase 1 Step 10 additions - every route in both declares an explicit
+# `require_permission(...)` (retiring `tests/safety/README.md`'s
+# previously-deferred invariant #12 for the routes that carry any business
+# meaning; `health`/`auth`'s deliberate permission-free routes remain a
+# documented exception, not a gap).
+_ROUTERS_REQUIRING_EXPLICIT_PERMISSIONS = (
+    "system.py",
+    "kill_switches.py",
+    "audit.py",
+    "instruments.py",
+    "paper.py",
+)
 
 
 def test_every_protected_router_declares_require_permission() -> None:
@@ -64,15 +75,20 @@ def test_no_permission_constant_anywhere_implies_live_execution() -> None:
         assert "EXECUTE" not in permission.value
 
 
-def test_assigning_live_trader_grants_no_permission_beyond_the_observer_roles() -> None:
-    """The central claim of Phase 1 Step 8's RBAC design, asserted
-    directly against the authoritative table: `live_trader`'s permission
-    set is not merely "small" or "LIVE-free" (the other tests in this
-    module check that) - it is *identical* to `researcher`'s and
-    `paper_trader`'s, and strictly narrower than `administrator`'s. A user
-    assigned `live_trader` therefore cannot reach anything a `researcher`
-    or `paper_trader` cannot also reach, and can never reach anything
-    `administrator`-only."""
+def test_assigning_live_trader_grants_no_permission_beyond_paper_trader() -> None:
+    """The central claim of Phase 1 Step 8's RBAC design, extended by Step
+    10: `live_trader`'s permission set is not merely "small" or "LIVE-free"
+    (the other tests in this module check that) - it is *identical* to
+    `paper_trader`'s (both include the PAPER-trading permission set added
+    in Step 10, ADR-012 - being able to *propose* a PAPER trade is not a
+    live-execution capability), and strictly narrower than
+    `administrator`'s. A user assigned `live_trader` therefore cannot reach
+    anything a `paper_trader` cannot also reach, and can never reach
+    anything `administrator`-only. `researcher` deliberately does **not**
+    receive the PAPER-trading permission set (it can look up instruments
+    but not submit a proposal or read the paper ledger), so it is no
+    longer equal to `live_trader`/`paper_trader` - asserted here as a
+    strict subset instead."""
     from atp_api.security.rbac import (
         ROLE_ADMINISTRATOR,
         ROLE_LIVE_TRADER,
@@ -82,8 +98,8 @@ def test_assigning_live_trader_grants_no_permission_beyond_the_observer_roles() 
     )
 
     live_trader_permissions = ROLE_PERMISSIONS[ROLE_LIVE_TRADER]
-    assert live_trader_permissions == ROLE_PERMISSIONS[ROLE_RESEARCHER]
     assert live_trader_permissions == ROLE_PERMISSIONS[ROLE_PAPER_TRADER]
+    assert ROLE_PERMISSIONS[ROLE_RESEARCHER] < live_trader_permissions
     assert live_trader_permissions < ROLE_PERMISSIONS[ROLE_ADMINISTRATOR]
 
 

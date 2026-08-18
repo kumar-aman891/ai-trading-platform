@@ -94,6 +94,24 @@ class ForbiddenError(ApiError):
     message = "You do not have permission to perform this action."
 
 
+class ConflictError(ApiError):
+    """Distinct from the generic `IntegrityError` handler's 409 below - a
+    proposal re-submitted with the same `client_request_id` but different
+    fields (Phase 1 Step 10's idempotency rule, `docs/schemas/order.md`) is
+    an application-level conflict the service detects and raises
+    deliberately, not a raw database constraint violation."""
+
+    code = "PROPOSAL_CONFLICT"
+    status_code = status.HTTP_409_CONFLICT
+    message = "A proposal with this client_request_id already exists with different parameters."
+
+
+class UnknownInstrumentError(ApiError):
+    code = "UNKNOWN_INSTRUMENT"
+    status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
+    message = "instrument_id does not refer to a known instrument."
+
+
 def _error_body(*, code: str, message: str) -> dict[str, Any]:
     return {"code": code, "message": message, "correlation_id": get_correlation_id()}
 

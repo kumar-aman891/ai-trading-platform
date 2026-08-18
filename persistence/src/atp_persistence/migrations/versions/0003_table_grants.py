@@ -168,12 +168,15 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute(
-        sa.text(
-            "GRANT UPDATE, DELETE, TRUNCATE ON audit.audit_events "
-            "TO atp_api, atp_paper_exec, atp_worker"
-        )
-    )
+    # audit.audit_events: deliberately NOT re-granted here. The Step 5
+    # coarse baseline (ops/sql/roles_and_schemas.sql.tmpl) never granted
+    # UPDATE/DELETE/TRUNCATE on `audit` to any role in the first place -
+    # only SELECT/INSERT - so there is nothing for downgrade() to restore.
+    # Granting them here would leave the database MORE permissive than it
+    # has ever been at any point in this migration chain, which is exactly
+    # the kind of defense-in-depth erosion append-only (ADR-010) exists to
+    # prevent. See tests/integration/db/test_table_grants.py's downgrade
+    # regression test.
     op.execute(
         sa.text(
             "REVOKE SELECT (session_id_hash, expires_at, revoked_at) ON core.sessions FROM atp_worker"

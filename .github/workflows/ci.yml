@@ -2,7 +2,10 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # TEMPORARY (Phase 1 Step 12 Phase A iteration): step12-phase-a-verify
+    # added so this branch's pushes trigger CI directly, since PR creation
+    # isn't available in this pass. Remove before merging to main.
+    branches: [main, step12-phase-a-verify]
   pull_request:
 
 # Least-privilege default; individual jobs opt into more only if needed.

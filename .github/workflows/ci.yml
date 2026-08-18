@@ -59,21 +59,15 @@ jobs:
       # *inside* ops/docker/Dockerfile.test's own image (its own `uv sync`
       # happens in that container, not on this host).
 
-      # Phase 1 Step 11: this job has never passed in this environment
-      # (Docker was unavailable throughout Phase 1 authoring, so the real
-      # data plane - migrations, table grants, append-only triggers,
-      # RBAC-at-DB-level - has never executed against a live Postgres).
-      # continue-on-error is a deliberate, temporary bridge: it lets the
-      # job run and report without becoming a permanently red required
-      # check on a repo that has never verified this path. It must be
-      # removed the first time this job passes - do not let it become
-      # permanent. See planning/CURRENT_PROGRESS.md Step 11 and the Step 12
-      # milestone that is gated on removing it.
+      # Phase 1 Step 12 Phase A iteration (step12-phase-a-verify branch only):
+      # continue-on-error deliberately dropped here so a genuine failure
+      # shows up as an unambiguous job failure while this data plane is
+      # being verified for the first time, rather than being masked. Not
+      # yet proven green - do not read this branch's CI state as proof.
       - name: Run integration suite against a real stack (ATP_REQUIRE_INTEGRATION_STACK=1)
         env:
           ATP_REQUIRE_INTEGRATION_STACK: "1"
         run: make test-integration
-        continue-on-error: true
 
   secret-scan:
     name: Secret scan (gitleaks)

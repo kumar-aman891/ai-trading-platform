@@ -1,4 +1,7 @@
-"""Pydantic request/response DTOs for the API boundary.
+"""Pydantic request/response DTOs for the API boundary (Phase 1 Step 7).
 
-Empty in Phase 1 Step 2.
+Never an ORM model, never a domain dataclass exposed directly - see each
+submodule's docstring for what it deliberately excludes and why.
 """
+
+from __future__ import annotations

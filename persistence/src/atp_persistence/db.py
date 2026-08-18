@@ -20,9 +20,12 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
+from atp_persistence.repositories.audit_writer import SqlAlchemyAuditEventWriter
 from atp_persistence.repositories.orders import SqlAlchemyOrderRepository
 from atp_persistence.repositories.risk_decisions import SqlAlchemyRiskDecisionRepository
+from atp_persistence.repositories.sessions import SqlAlchemySessionRepository
 from atp_persistence.repositories.trade_proposals import SqlAlchemyTradeProposalRepository
+from atp_persistence.repositories.users import SqlAlchemyUserRepository
 
 
 def create_engine(dsn: str, *, echo: bool = False) -> AsyncEngine:
@@ -48,6 +51,9 @@ class UnitOfWork:
         self.trade_proposals = SqlAlchemyTradeProposalRepository(session)
         self.risk_decisions = SqlAlchemyRiskDecisionRepository(session)
         self.orders = SqlAlchemyOrderRepository(session)
+        self.users = SqlAlchemyUserRepository(session)
+        self.sessions = SqlAlchemySessionRepository(session)
+        self.audit = SqlAlchemyAuditEventWriter(session)
 
     async def commit(self) -> None:
         await self._session.commit()
@@ -78,3 +84,23 @@ async def unit_of_work(
             raise
         else:
             await uow.commit()
+
+
+@asynccontextmanager
+async def read_only_session(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> AsyncIterator[AsyncSession]:
+    """A session for read-only repositories (`AuditEventRepository`,
+    `SqlAlchemyKillSwitchStateRepository` - Phase 1 Step 7). Always rolled
+    back on exit, never committed - nothing using this session is
+    permitted to write, so there is never a change to persist. Kept
+    separate from `UnitOfWork`, which exists specifically for the
+    write-path repositories (`trade_proposals`/`risk_decisions`/`orders`)
+    and always commits on success; reusing it here would commit an
+    empty/no-op transaction for every read, which is harmless but
+    misleading about intent."""
+    async with session_factory() as session:
+        try:
+            yield session
+        finally:
+            await session.rollback()

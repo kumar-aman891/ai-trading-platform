@@ -21,12 +21,19 @@ dev = [
     # Step 5 (PostgreSQL + Redis infrastructure) test-only dependencies.
     # Used exclusively by tests/integration/db/ to verify role privileges,
     # schema isolation, and Redis auth against a real instance
-    # (docker-compose.test.yml). Not a production dependency of any package
-    # in the workspace — no ORM, no repositories, no application code
-    # touches these (persistence/SQLAlchemy work is Step 8, ADR-009).
+    # (docker-compose.test.yml). atp_persistence declares its own psycopg
+    # dependency for runtime use (Step 6); this floor is kept here too so
+    # the raw-connection security suite in tests/integration/db/ does not
+    # depend on atp_persistence being installed to exercise role grants.
     "psycopg[binary]>=3.2",
     "redis>=5.0",
     "pyyaml>=6.0",
+    # Step 7 (FastAPI application layer) test-only dependency: Starlette's
+    # TestClient requires httpx to be installed, even though no service
+    # package imports it directly (root pyproject.toml's import-linter
+    # contract still forbids atp_api/atp_platform/etc. from importing
+    # httpx/requests/aiohttp themselves - ADR-006 no-egress).
+    "httpx>=0.27",
 ]
 
 [tool.uv]

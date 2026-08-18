@@ -7,6 +7,12 @@ dependencies = [
     "atp-domain",
     "atp-platform",
     "atp-persistence",
+    "fastapi>=0.115,<0.116",
+    "uvicorn[standard]>=0.30,<0.31",
+    # Step 8 (authentication): Argon2id password hashing (docs/SECURITY.md,
+    # docs/schemas/user.md). No other hashing library is used anywhere in
+    # this codebase.
+    "argon2-cffi>=23.1,<24",
 ]
 
 [tool.uv.sources]

@@ -28,6 +28,9 @@ PHASE_1_PACKAGES = [
     "atp_api.security",
     "atp_api.routers",
     "atp_api.schemas",
+    "atp_api.middleware",
+    "atp_api.services",
+    "atp_api.bootstrap",
     "atp_exec_paper",
     "atp_worker",
 ]

@@ -17,6 +17,24 @@ Create distinct permissions:
 
 Live trading is an elevated capability.
 
+These five roles are future capability *categories* spanning every phase
+of the platform, not a Phase-1-only vocabulary - they are declared now so
+`core.users.role` stays stable as later phases add capability, the same
+way the domain's `Mode.LIVE` value exists years before any code path may
+act on it. In Phase 1, `live_trader` is a valid, assignable role that
+carries **zero** live-trading capability: it is granted the identical
+permission set as `researcher`/`paper_trader` (`atp_api.security.rbac`),
+because no live route or live execution service exists yet for any
+permission to authorize. No Phase-1 permission grants live execution.
+
+A role name is never, by itself, a sufficient authorization check.
+`Permission` (`atp_api.security.rbac.Permission`) is the sole authoritative
+authorization unit - every route/service asks "does this role's permission
+set contain the permission this action requires," never "is this role
+X." Comparing a role string directly, anywhere outside
+`atp_api.security.rbac`'s own `Role -> Permission` table definition, is
+not a supported pattern.
+
 ## Prompt injection defense
 
 Treat all web content, news, documents, instrument names, and external tool output as untrusted data. Delimit retrieved content and explicitly separate it from system instructions.

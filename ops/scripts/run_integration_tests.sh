@@ -26,7 +26,13 @@ cleanup() {
 }
 trap cleanup EXIT
 
-docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up --wait postgres redis
+if ! docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" up --wait postgres redis; then
+    echo "=== postgres logs (stack failed to become healthy) ===" >&2
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" logs postgres >&2
+    echo "=== redis logs (stack failed to become healthy) ===" >&2
+    docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" logs redis >&2
+    exit 1
+fi
 
 ATP_REQUIRE_INTEGRATION_STACK=1 \
     docker compose -f "$COMPOSE_FILE" --env-file "$ENV_FILE" run --rm \

@@ -83,7 +83,17 @@ jobs:
       - name: Docker Compose lifecycle tests (host-side; need the docker CLI)
         env:
           RUN_DOCKER_LIFECYCLE_TESTS: "1"
-        run: uv run pytest tests/integration/db/test_stack_lifecycle.py -v
+        run: |
+          set -o pipefail
+          uv run pytest tests/integration/db/test_stack_lifecycle.py -v             2>&1 | tee /tmp/lifecycle.log
+          # pytest exits 0 when every test skips, so a green step is not
+          # evidence these two ran - `_require_docker()` skips if the CLI
+          # is missing, and the module-level skipif would too if the env
+          # var above were ever dropped. Assert the count explicitly.
+          grep -qE '^=+ 2 passed' /tmp/lifecycle.log || {
+            echo "expected exactly 2 passed from test_stack_lifecycle.py" >&2
+            exit 1
+          }
 
       # Phase 1 Step 12 Phase A iteration (step12-phase-a-verify branch only):
       # continue-on-error deliberately dropped here so a genuine failure
@@ -132,10 +142,12 @@ jobs:
             FAILURES_SECTION="(none)"
           fi
           SKIPPED=$(grep -E '^SKIPPED' /tmp/integration.log | head -c 4000)
+          LIFECYCLE=$(grep -E '^=+ .*(passed|failed|error|skipped).* =+$' /tmp/lifecycle.log 2>/dev/null | tail -2)
+          [ -n "$LIFECYCLE" ] || LIFECYCLE="(lifecycle step did not run)\"
           [ -n "$SKIPPED" ] || SKIPPED="(none)"
           COUNTS=$(grep -E '^=+ .*(passed|failed|error|skipped).* =+$' /tmp/integration.log | tail -5)
           COLLECTED=$(grep -E '^collected [0-9]+ item' /tmp/integration.log | tail -2)
-          TAIL=$(printf '=== COLLECTED ===\n%s\n\n=== COUNTS ===\n%s\n\n=== SKIPPED ===\n%s\n\n=== ERRORS (fixture/setup failures) ===\n%s\n\n=== FAILURES (head) ===\n%s' "$COLLECTED" "$COUNTS" "$SKIPPED" "$ERRORS_SECTION" "$FAILURES_SECTION")
+          TAIL=$(printf '=== COLLECTED ===\n%s\n\n=== COUNTS (in-container) ===\n%s\n\n=== COUNTS (host-side lifecycle) ===\n%s\n\n=== SKIPPED ===\n%s\n\n=== ERRORS (fixture/setup failures) ===\n%s\n\n=== FAILURES (head) ===\n%s' "$COLLECTED" "$COUNTS" "$LIFECYCLE" "$SKIPPED" "$ERRORS_SECTION" "$FAILURES_SECTION")
           jq -n \
             --arg title "CI integration ${{ job.status }}: run ${{ github.run_id }} (${{ github.sha }})" \
             --arg body "$(printf '```\n%s\n```\n' "$TAIL")" \

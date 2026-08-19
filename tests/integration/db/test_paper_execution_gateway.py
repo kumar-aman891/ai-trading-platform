@@ -24,6 +24,7 @@ from atp_domain.clock import UTCClock
 from atp_domain.ids import UUIDv7Generator
 from atp_exec_paper.gateway import run_once
 from atp_persistence.db import make_session_factory
+from tests.integration.db.conftest import delete_user_cascade
 
 
 def _new_uuid() -> str:
@@ -59,9 +60,7 @@ def seeded_user_id(migrated_database: str, owner_connection: psycopg.Connection)
         )
     owner_connection.commit()
     yield user_id
-    with owner_connection.cursor() as cur:
-        cur.execute("DELETE FROM core.users WHERE user_id = %s", (user_id,))
-    owner_connection.commit()
+    delete_user_cascade(owner_connection, user_id)
 
 
 def _insert_proposal(

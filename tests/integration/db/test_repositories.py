@@ -37,6 +37,7 @@ from atp_domain.types import (
     Side,
 )
 from atp_persistence.db import create_engine, make_session_factory, unit_of_work
+from tests.integration.db.conftest import delete_user_cascade
 
 
 def _new_uuid() -> str:
@@ -76,9 +77,7 @@ def seeded_user_id(migrated_database: str, owner_connection: psycopg.Connection)
         )
     owner_connection.commit()
     yield user_id
-    with owner_connection.cursor() as cur:
-        cur.execute("DELETE FROM core.users WHERE user_id = %s", (user_id,))
-    owner_connection.commit()
+    delete_user_cascade(owner_connection, user_id)
 
 
 def _make_proposal(instrument_id: str, *, client_request_id: str) -> TradeProposal:

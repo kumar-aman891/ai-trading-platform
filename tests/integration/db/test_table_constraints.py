@@ -18,6 +18,8 @@ from collections.abc import Iterator
 import psycopg
 import pytest
 
+from tests.integration.db.conftest import delete_user_cascade
+
 
 def _new_uuid() -> str:
     return str(uuid.uuid4())
@@ -54,9 +56,7 @@ def seeded_user_id(migrated_database: str, owner_connection: psycopg.Connection)
         )
     owner_connection.commit()
     yield user_id
-    with owner_connection.cursor() as cur:
-        cur.execute("DELETE FROM core.users WHERE user_id = %s", (user_id,))
-    owner_connection.commit()
+    delete_user_cascade(owner_connection, user_id)
 
 
 def test_trade_proposal_rejects_zero_quantity(

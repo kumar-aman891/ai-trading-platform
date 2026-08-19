@@ -136,6 +136,63 @@ def owner_connection(_owner_connection_session: psycopg.Connection) -> Iterator[
     _owner_connection_session.rollback()
 
 
+# Reverse FK dependency order for everything a test-seeded `core.users` row
+# can end up owning, via `paper.trade_proposals.created_by`:
+#   cash_ledger -> fills -> orders -> order_intents -> risk_decisions
+#   -> trade_proposals -> users
+# (see atp_persistence.models.paper). A fixture that deletes only the
+# `core.users` row raises `ForeignKeyViolation` the moment its test
+# actually created a proposal - which is every test that exercises the
+# execution path. Surfaced by the first real run against Postgres
+# (Phase 1 Step 12 Phase A); before that these tests never reached
+# teardown cleanly enough for it to fire.
+_DELETE_USER_CASCADE_STATEMENTS = (
+    """
+    DELETE FROM paper.cash_ledger WHERE related_fill_id IN (
+        SELECT f.fill_id FROM paper.fills f
+        JOIN paper.orders o ON o.internal_order_id = f.internal_order_id
+        JOIN paper.trade_proposals tp ON tp.proposal_id = o.proposal_id
+        WHERE tp.created_by = %s)
+    """,
+    """
+    DELETE FROM paper.fills WHERE internal_order_id IN (
+        SELECT o.internal_order_id FROM paper.orders o
+        JOIN paper.trade_proposals tp ON tp.proposal_id = o.proposal_id
+        WHERE tp.created_by = %s)
+    """,
+    """
+    DELETE FROM paper.orders WHERE proposal_id IN (
+        SELECT proposal_id FROM paper.trade_proposals WHERE created_by = %s)
+    """,
+    """
+    DELETE FROM paper.order_intents WHERE decision_id IN (
+        SELECT rd.decision_id FROM paper.risk_decisions rd
+        JOIN paper.trade_proposals tp ON tp.proposal_id = rd.proposal_id
+        WHERE tp.created_by = %s)
+    """,
+    """
+    DELETE FROM paper.risk_decisions WHERE proposal_id IN (
+        SELECT proposal_id FROM paper.trade_proposals WHERE created_by = %s)
+    """,
+    "DELETE FROM paper.trade_proposals WHERE created_by = %s",
+    "DELETE FROM core.sessions WHERE user_id = %s",
+    "DELETE FROM core.users WHERE user_id = %s",
+)
+
+
+def delete_user_cascade(conn: psycopg.Connection, user_id: str) -> None:
+    """Remove a test-seeded `core.users` row and everything referencing it.
+
+    `audit.audit_events` is deliberately not touched - it is append-only
+    (ADR-010) and its rejecting trigger refuses DELETE even for
+    `atp_owner`. Audit rows carry no FK to `core.users` (`actor_id` is a
+    plain Text column), so they never block this cleanup."""
+    with conn.cursor() as cur:
+        for statement in _DELETE_USER_CASCADE_STATEMENTS:
+            cur.execute(statement, (user_id,))
+    conn.commit()
+
+
 @pytest.fixture(scope="session")
 def api_connection(api_dsn: str) -> Iterator[psycopg.Connection]:
     conn = _connect(api_dsn, label="atp_api")

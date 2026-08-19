@@ -107,12 +107,33 @@ def redis_url() -> str:
 
 
 @pytest.fixture(scope="session")
-def owner_connection(owner_dsn: str) -> Iterator[psycopg.Connection]:
+def _owner_connection_session(owner_dsn: str) -> Iterator[psycopg.Connection]:
     conn = _connect(owner_dsn, label="atp_owner")
     try:
         yield conn
     finally:
         conn.close()
+
+
+@pytest.fixture
+def owner_connection(_owner_connection_session: psycopg.Connection) -> Iterator[psycopg.Connection]:
+    """The session-scoped `atp_owner` connection, rolled back after every
+    test.
+
+    The connection itself stays session-scoped (connecting per-test is
+    needlessly slow), but this per-test wrapper guarantees it is never
+    handed to the next test still in PostgreSQL's `INERROR` state.
+    Without it, a single test that leaves an aborted transaction open -
+    e.g. by triggering a constraint or an append-only trigger without
+    rolling back - poisons every later test sharing the connection, which
+    then all fail with `InFailedSqlTransaction` regardless of their own
+    correctness. The first real run against Postgres (Phase 1 Step 12
+    Phase A) hit exactly that: one genuine bug produced 36 failures and
+    23 errors, and the real cause was buried under cascade noise. Tests
+    that own their own state still commit/roll back explicitly; this is a
+    backstop, not a substitute for that."""
+    yield _owner_connection_session
+    _owner_connection_session.rollback()
 
 
 @pytest.fixture(scope="session")

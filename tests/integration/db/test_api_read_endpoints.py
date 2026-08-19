@@ -164,19 +164,25 @@ def test_audit_events_endpoint_returns_a_seeded_event(
         )
     owner_connection.commit()
 
-    try:
-        response = authenticated_client.get(
-            "/api/v1/audit/events", params={"action": "TEST_EVENT", "limit": 10}
-        )
+    # The seeded event is deliberately NOT cleaned up: `audit.audit_events`
+    # is append-only (ADR-010), enforced by the `audit_events_append_only`
+    # trigger, which rejects DELETE even for `atp_owner`. An earlier
+    # version of this test attempted exactly that DELETE and only got away
+    # with it because the request above used to 401 before ever reaching
+    # the cleanup - the first real run against Postgres (Phase 1 Step 12
+    # Phase A) surfaced `RaiseException: audit.audit_events is append-only:
+    # DELETE is not permitted`. The row is harmless: it carries a unique
+    # `event_id` and a `TEST_EVENT` action no other test asserts on, and
+    # the whole database is a tmpfs-backed ephemeral stack destroyed at the
+    # end of the run.
+    response = authenticated_client.get(
+        "/api/v1/audit/events", params={"action": "TEST_EVENT", "limit": 10}
+    )
 
-        assert response.status_code == 200
-        body = response.json()
-        assert any(item["event_id"] == event_id for item in body["items"])
-        assert body["limit"] == 10
-    finally:
-        with owner_connection.cursor() as cur:
-            cur.execute("DELETE FROM audit.audit_events WHERE event_id = %s", (event_id,))
-        owner_connection.commit()
+    assert response.status_code == 200
+    body = response.json()
+    assert any(item["event_id"] == event_id for item in body["items"])
+    assert body["limit"] == 10
 
 
 def test_audit_events_endpoint_never_exposes_a_payload_field(

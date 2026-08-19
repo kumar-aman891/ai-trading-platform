@@ -21,7 +21,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import Text, cast, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from atp_domain.audit import AuditEvent
@@ -77,13 +77,28 @@ class SqlAlchemyAuditEventRepository:
         """`count(*)`, `max(event_id)`, `max(recorded_at)` over
         `[window_start, window_end)` - a closed, past window supplied by
         the caller (`atp_worker.handlers.audit_integrity`, ADR-013 §2).
-        `max(event_id)` orders correctly because every `event_id` is a
-        UUIDv7 (time-ordered) and PostgreSQL's `uuid` type supports
-        ordering comparison."""
+
+        `event_id` is cast to text before `max()` because **PostgreSQL has
+        no `max(uuid)` aggregate** before version 18, and this project
+        targets `postgres:16` (`docker-compose.test.yml`). The `uuid` type
+        does support ordering *comparison* (so `ORDER BY event_id` is
+        legal), which is what makes the missing aggregate easy to assume
+        into existence - an earlier revision of this docstring did exactly
+        that, and `function max(uuid) does not exist` was raised the first
+        time this ran against real PostgreSQL (Phase 1 Step 12 Phase B).
+
+        The cast is exact, not an approximation: a canonical uuid renders
+        as fixed-position lowercase hex with hyphens at identical offsets,
+        and for hex digits ASCII order (`0`-`9` then `a`-`f`) matches
+        nibble order - so lexicographic text ordering is byte-for-byte
+        equivalent to PostgreSQL's own `uuid` comparison. Every
+        `event_id` is a UUIDv7, so that ordering is also time ordering.
+        `as_uuid=False` (`models/base.py`) already hands Python a `str`
+        either way, so the cast changes no value the caller observes."""
         result = await self._session.execute(
             select(
                 func.count(AuditEventRow.event_id),
-                func.max(AuditEventRow.event_id),
+                func.max(cast(AuditEventRow.event_id, Text)),
                 func.max(AuditEventRow.recorded_at),
             ).where(
                 AuditEventRow.occurred_at >= window_start,

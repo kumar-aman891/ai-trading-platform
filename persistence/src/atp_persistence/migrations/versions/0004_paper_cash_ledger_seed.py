@@ -67,13 +67,20 @@ _SEED_MARKER_ENTRY_TYPE = "DEPOSIT"
 def upgrade() -> None:
     entry_id = UUIDv7Generator().new_id()
     now = datetime.now(UTC)
+    # `entry_id` needs an explicit server-side cast (`CAST(:entry_id AS
+    # uuid)`) for the same reason migration 0001's bootstrap risk_config
+    # row does: it is bound as a plain Python `str`, SQLAlchemy infers
+    # `String` for the bind parameter, and the postgresql+psycopg dialect
+    # renders an explicit `::VARCHAR` cast on it - which Postgres cannot
+    # implicitly coerce into the `uuid` column without help.
     op.execute(
         sa.text(
             """
             INSERT INTO paper.cash_ledger
                 (entry_id, mode, entry_type, amount, related_fill_id, balance_after, created_at)
             VALUES
-                (:entry_id, 'PAPER', :entry_type, :amount, NULL, :balance_after, :created_at)
+                (CAST(:entry_id AS uuid), 'PAPER', :entry_type, :amount, NULL, :balance_after,
+                 :created_at)
             """
         ).bindparams(
             entry_id=entry_id,

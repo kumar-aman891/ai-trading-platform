@@ -178,6 +178,18 @@ def upgrade() -> None:
     # static SQL, even though it works fine online. Binding `config` as a
     # JSON-encoded string and casting it server-side (`:config::jsonb`)
     # sidesteps that limitation in both modes.
+    #
+    # `risk_config_id` needs the same explicit server-side cast
+    # (`CAST(:risk_config_id AS uuid)`), for a different reason: it is
+    # bound as a plain Python `str` (RiskConfigId is `NewType("...", str)`),
+    # so SQLAlchemy infers `String` for the bind parameter and the
+    # postgresql+psycopg dialect renders an explicit `::VARCHAR` cast on
+    # it. Postgres has no implicit VARCHAR->uuid cast, so without this the
+    # insert fails with `DatatypeMismatch: column "risk_config_id" is of
+    # type uuid but expression is of type character varying` - caught by
+    # the first real run of this migration against Postgres (Phase 1 Step
+    # 12 Phase A), since Docker was unavailable throughout every earlier
+    # step that touched this file.
     _bootstrap_config = RiskConfig(
         risk_config_id=RiskConfigId(UUIDv7Generator().new_id()),
         mode=Mode.PAPER,
@@ -191,8 +203,8 @@ def upgrade() -> None:
             INSERT INTO core.risk_config
                 (risk_config_id, mode, version, config, config_hash, active, created_at, created_by)
             VALUES
-                (:risk_config_id, :mode, :version, CAST(:config AS jsonb), :config_hash, :active,
-                 :created_at, NULL)
+                (CAST(:risk_config_id AS uuid), :mode, :version, CAST(:config AS jsonb),
+                 :config_hash, :active, :created_at, NULL)
             """
         ).bindparams(
             risk_config_id=_bootstrap_config.risk_config_id,

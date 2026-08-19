@@ -8,7 +8,7 @@ from decimal import Decimal
 import pytest
 
 from atp_domain.errors import InvalidMoneyValueError
-from atp_domain.money import Money, Price, Quantity
+from atp_domain.money import MAX_SCALE, Money, Price, Quantity
 
 
 def test_price_accepts_decimal() -> None:
@@ -128,3 +128,34 @@ def test_repeated_decimal_arithmetic_is_bit_for_bit_reproducible() -> None:
     for _ in range(1000):
         total = total + Money(Decimal("0.01"))
     assert total.value == Decimal("10.00")
+
+
+def test_full_scale_quantity_times_price_stays_within_max_scale() -> None:
+    """Regression (Phase 1 Step 12 Phase A): a quantity and a price
+    round-tripped through `NUMERIC(20,6)` come back with 6 fractional
+    digits each, so their exact product has 12 - more than `Money`
+    accepts. Before this was fixed, every real paper execution raised
+    `InvalidMoneyValueError` from inside the risk engine rather than
+    producing a decision. Unit tests had never caught it because they
+    used small-scale literals like `Decimal("10")`."""
+    quantity = Quantity(Decimal("10.000000"))
+    price = Price(Decimal("100.000000"))
+
+    notional = quantity * price
+
+    assert notional.value == Decimal("1000.000000")
+    assert -notional.value.as_tuple().exponent <= MAX_SCALE
+    assert (price * quantity).value == notional.value
+
+
+def test_notional_quantization_rounds_away_from_zero() -> None:
+    """Both call sites are risk checks (RISK.LIMIT.001, RISK.CAPITAL.001),
+    so quantization must never understate a notional - it may only ever
+    overstate it, and so can never admit an order the exact value would
+    have rejected."""
+    quantity = Quantity(Decimal("0.000001"))
+    price = Price(Decimal("1.500000"))
+
+    # Exact product is 0.0000015 (7 dp); rounding away from zero gives
+    # 0.000002, never 0.000001.
+    assert (quantity * price).value == Decimal("0.000002")

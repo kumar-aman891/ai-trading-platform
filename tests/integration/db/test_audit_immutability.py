@@ -83,7 +83,15 @@ def seeded_user_id(owner_connection: psycopg.Connection) -> str:
 @pytest.fixture
 def seeded_risk_config_id(owner_connection: psycopg.Connection, seeded_user_id: str) -> str:
     config_id = _new_uuid()
-    version = int.from_bytes(os.urandom(4), "big")
+    # `core.risk_config.version` is a Postgres `integer` (max 2147483647).
+    # Four random bytes reach 4294967295, so the original
+    # `int.from_bytes(os.urandom(4), "big")` overflowed on roughly half
+    # of all runs with `NumericValueOutOfRange` - a latent flake that
+    # only became visible on the first real run against Postgres
+    # (Phase 1 Step 12 Phase A). Three bytes stay safely in range while
+    # keeping collisions with other tests' versions effectively
+    # impossible.
+    version = int.from_bytes(os.urandom(3), "big")
     with owner_connection.cursor() as cur:
         cur.execute(
             """

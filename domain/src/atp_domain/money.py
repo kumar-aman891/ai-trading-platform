@@ -18,7 +18,7 @@ bug rather than surface it.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import ROUND_UP, Decimal
 
 from atp_domain.errors import InvalidMoneyValueError
 
@@ -87,6 +87,39 @@ def _normalize(
     return decimal_value
 
 
+def _notional(left: Decimal, right: Decimal) -> Money:
+    """Multiply two already-validated Decimals into a Money notional.
+
+    Decimal multiplication is exact, so multiplying two MAX_SCALE values
+    yields up to 2*MAX_SCALE fractional digits - e.g. a quantity and a
+    price both round-tripped through a `NUMERIC(20,6)` column come back
+    as 6-dp Decimals whose product has 12, which `Money` rejects. That
+    made every real execution raise `InvalidMoneyValueError` from inside
+    the risk engine instead of producing a decision (found on the first
+    real run against Postgres, Phase 1 Step 12 Phase A; unit tests used
+    small-scale literals and never reached 2*MAX_SCALE).
+
+    The module's "reject, never silently round" rule is about *input*
+    values, where extra digits mean a mis-specified price or quantity
+    worth surfacing. It cannot apply to a computed product, whose extra
+    digits are an arithmetic certainty rather than a caller error - so
+    the product is quantized here instead.
+
+    `ROUND_UP` (away from zero), not banker's rounding: both call sites
+    are risk checks - `RISK.LIMIT.001` (max order notional) and
+    `RISK.CAPITAL.001` (simulated cash sufficiency) - and in both,
+    rounding away from zero is the conservative direction. It can only
+    ever overstate an order's notional or its cash requirement, never
+    understate either, so quantization can never admit an order that the
+    exact value would have rejected. The adjustment is at most 1e-6.
+    """
+    product = left * right
+    exponent = product.as_tuple().exponent
+    if isinstance(exponent, int) and exponent < -MAX_SCALE:
+        product = product.quantize(Decimal(1).scaleb(-MAX_SCALE), rounding=ROUND_UP)
+    return Money(product)
+
+
 @dataclass(frozen=True, slots=True)
 class Price:
     """A per-unit price. Always strictly positive - a zero or negative
@@ -103,7 +136,7 @@ class Price:
     def __mul__(self, quantity: Quantity) -> Money:
         if not isinstance(quantity, Quantity):
             return NotImplemented
-        return Money(self.value * quantity.value)
+        return _notional(self.value, quantity.value)
 
     def __str__(self) -> str:
         return str(self.value)
@@ -125,7 +158,7 @@ class Quantity:
     def __mul__(self, price: Price) -> Money:
         if not isinstance(price, Price):
             return NotImplemented
-        return Money(self.value * price.value)
+        return _notional(self.value, price.value)
 
     def is_multiple_of(self, step: Decimal) -> bool:
         if step <= 0:

@@ -82,8 +82,12 @@ jobs:
       # the last part of the captured output as an issue (readable via the
       # unauthenticated public API) purely to unblock iteration. Remove
       # before merging to main.
-      - name: Post diagnostic log on failure (temporary, iteration-only)
-        if: failure()
+      # `always()`, not `failure()`: a clean job exit is not evidence of a
+      # clean *suite* - pytest reporting "78 skipped" exits 0 too. The
+      # Phase A gate is the count line itself, so it has to be readable on
+      # a successful run as well.
+      - name: Post diagnostic log (temporary, iteration-only)
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -107,9 +111,11 @@ jobs:
           else
             FAILURES_SECTION="(none)"
           fi
-          TAIL=$(printf '=== ERRORS (fixture/setup failures) ===\n%s\n\n=== FAILURES (head) ===\n%s' "$ERRORS_SECTION" "$FAILURES_SECTION")
+          COUNTS=$(grep -E '^=+ .*(passed|failed|error|skipped).* =+$' /tmp/integration.log | tail -5)
+          COLLECTED=$(grep -E '^collected [0-9]+ item' /tmp/integration.log | tail -2)
+          TAIL=$(printf '=== COLLECTED ===\n%s\n\n=== COUNTS ===\n%s\n\n=== ERRORS (fixture/setup failures) ===\n%s\n\n=== FAILURES (head) ===\n%s' "$COLLECTED" "$COUNTS" "$ERRORS_SECTION" "$FAILURES_SECTION")
           jq -n \
-            --arg title "CI integration failure: run ${{ github.run_id }} (${{ github.sha }})" \
+            --arg title "CI integration ${{ job.status }}: run ${{ github.run_id }} (${{ github.sha }})" \
             --arg body "$(printf '```\n%s\n```\n' "$TAIL")" \
             '{title: $title, body: $body}' > /tmp/issue_body.json
           curl -s -X POST \

@@ -96,7 +96,14 @@ jobs:
           else
             cp /tmp/integration.log /tmp/integration_relevant.log
           fi
-          TAIL=$(tail -c 60000 /tmp/integration_relevant.log 2>/dev/null || echo "no log captured")
+          # GitHub issue bodies cap at 65536 chars, and the FAILURES section
+          # alone can exceed that - a plain tail keeps only the LAST
+          # failures (cascade noise), losing the first, real one. Keep the
+          # head (earliest, real failures) and the tail (short summary)
+          # instead, joined with a marker.
+          HEAD=$(head -c 45000 /tmp/integration_relevant.log 2>/dev/null || echo "")
+          TAIL_PART=$(tail -c 15000 /tmp/integration_relevant.log 2>/dev/null || echo "")
+          TAIL=$(printf '%s\n\n...[truncated middle]...\n\n%s' "$HEAD" "$TAIL_PART")
           jq -n \
             --arg title "CI integration failure: run ${{ github.run_id }} (${{ github.sha }})" \
             --arg body "$(printf '```\n%s\n```\n' "$TAIL")" \

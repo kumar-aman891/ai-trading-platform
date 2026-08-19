@@ -87,7 +87,16 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAIL=$(tail -c 60000 /tmp/integration.log 2>/dev/null || echo "no log captured")
+          # Prefer the pytest FAILURES section (skips the docker image-pull
+          # noise that otherwise fills a byte-count tail and pushes the
+          # actual tracebacks out of the captured window) - fall back to a
+          # plain tail if pytest never got that far.
+          if grep -q "FAILURES" /tmp/integration.log; then
+            sed -n '/FAILURES/,$p' /tmp/integration.log > /tmp/integration_relevant.log
+          else
+            cp /tmp/integration.log /tmp/integration_relevant.log
+          fi
+          TAIL=$(tail -c 60000 /tmp/integration_relevant.log 2>/dev/null || echo "no log captured")
           jq -n \
             --arg title "CI integration failure: run ${{ github.run_id }} (${{ github.sha }})" \
             --arg body "$(printf '```\n%s\n```\n' "$TAIL")" \

@@ -98,33 +98,44 @@ jobs:
           set -o pipefail
           make test-integration 2>&1 | tee /tmp/integration.log
 
-      # TEMPORARY (Phase 1 Step 12 Phase B): re-emit the failing pytest
-      # output as workflow *annotations*. GitHub's job-log API requires
-      # admin rights even on a public repository, but check-run
-      # annotations are readable anonymously - so this is what makes an
-      # integration failure diagnosable at all from outside the repo.
-      # Mirrors the "temporary failure-diagnostic capture" steps Phase A
-      # used and then removed; remove this one the same way once the
-      # worker integration suite is green.
-      - name: Surface integration failure as annotations (temporary diagnostic)
-        if: failure()
+      # `make test-integration` exiting 0 is not by itself evidence the
+      # worker suite ran - the same reasoning the lifecycle step above
+      # already applies to its own two tests, and the reason
+      # ATP_REQUIRE_INTEGRATION_STACK exists at all. Assert the five
+      # tests in test_worker_job_queue.py actually executed and passed,
+      # so a future regression that silently skips them (a renamed
+      # fixture, a dropped DSN, a collection error) fails this job
+      # instead of quietly reporting green.
+      #
+      # The annotations are load-bearing, not decoration: GitHub's
+      # job-log API requires admin rights even on a public repository,
+      # while check-run annotations are readable anonymously - so this is
+      # what makes an integration result reviewable from outside the repo
+      # at all.
+      - name: Assert the worker integration suite executed (and report counts)
+        if: always()
         run: |
           if [ ! -f /tmp/integration.log ]; then
             echo "::error title=integration-diagnostic::/tmp/integration.log does not exist"
-            exit 0
+            exit 1
           fi
-          emit() {
-            title="$1"
-            body="$2"
+          emit_error() {
+            body="$1"
             [ -z "$body" ] && return 0
             escaped=$(printf '%s' "$body" | sed 's/%/%25/g' | sed 's/\r//g' | awk '{printf "%s%%0A", $0}')
-            echo "::error title=${title}::${escaped}"
+            echo "::error title=$2::${escaped}"
           }
-          summary=$(sed -n '/short test summary info/,$p' /tmp/integration.log | head -c 4000)
-          emit "pytest-summary" "$summary"
-          errors=$(grep -nE "^E  |ERROR |Interrupted|error during collection|ModuleNotFoundError|ImportError" /tmp/integration.log | head -60 | head -c 4000)
-          emit "pytest-errors" "$errors"
-          emit "log-tail" "$(tail -60 /tmp/integration.log | head -c 4000)"
+          summary=$(grep -aE '^=+ .*(passed|failed|error)' /tmp/integration.log | tail -1)
+          worker_passed=$(grep -acE 'test_worker_job_queue\.py::[a-z_]+ PASSED' /tmp/integration.log || true)
+          worker_bad=$(grep -acE 'test_worker_job_queue\.py::[a-z_]+ (FAILED|ERROR|SKIPPED)' /tmp/integration.log || true)
+          echo "::notice title=integration-counts::${summary} || worker_passed=${worker_passed} worker_not_passed=${worker_bad}"
+          if [ "${worker_passed}" -ne 5 ] || [ "${worker_bad}" -ne 0 ]; then
+            emit_error "expected 5 passed / 0 non-passed in test_worker_job_queue.py, got passed=${worker_passed} not-passed=${worker_bad}. Summary: ${summary}" "worker-suite-did-not-execute"
+            emit_error "$(sed -n '/short test summary info/,$p' /tmp/integration.log | head -c 3500)" "pytest-summary"
+            emit_error "$(grep -anE '^E  |Interrupted|error during collection|ModuleNotFoundError|ImportError' /tmp/integration.log | head -40 | head -c 3500)" "pytest-errors"
+            emit_error "$(tail -60 /tmp/integration.log | head -c 3500)" "log-tail"
+            exit 1
+          fi
 
 
   secret-scan:

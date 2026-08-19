@@ -143,7 +143,7 @@ jobs:
           fi
           SKIPPED=$(grep -E '^SKIPPED' /tmp/integration.log | head -c 4000)
           LIFECYCLE=$(grep -E '^=+ .*(passed|failed|error|skipped).* =+$' /tmp/lifecycle.log 2>/dev/null | tail -2)
-          [ -n "$LIFECYCLE" ] || LIFECYCLE="(lifecycle step did not run)\"
+          [ -n "$LIFECYCLE" ] || LIFECYCLE="(lifecycle step did not run)"
           [ -n "$SKIPPED" ] || SKIPPED="(none)"
           COUNTS=$(grep -E '^=+ .*(passed|failed|error|skipped).* =+$' /tmp/integration.log | tail -5)
           COLLECTED=$(grep -E '^collected [0-9]+ item' /tmp/integration.log | tail -2)

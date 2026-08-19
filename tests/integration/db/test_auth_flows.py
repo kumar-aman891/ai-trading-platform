@@ -53,7 +53,14 @@ def _build_client(owner_dsn: str, *, bootstrap_admin_token: str | None = None) -
     session_factory = make_session_factory(engine)
     api_settings = ApiSettings(bootstrap_admin_token=bootstrap_admin_token)  # type: ignore[arg-type]
     app = create_app(settings=settings, api_settings=api_settings, session_factory=session_factory)
-    return TestClient(app, base_url="https://testserver")
+    # `client=` overrides Starlette's default ("testclient", 50000). The
+    # login route records `request.client.host` into
+    # `core.sessions.ip_address`, a Postgres `INET` column that rejects
+    # the literal string "testclient" with `DataError` -> 503. The tests
+    # below that only assert on a *later* call's status code silently
+    # tolerated a failed login before this was fixed (Phase 1 Step 12
+    # Phase A, first real run against Postgres).
+    return TestClient(app, base_url="https://testserver", client=("127.0.0.1", 50000))
 
 
 def _insert_user(
@@ -134,13 +141,14 @@ def test_a_session_already_expired_in_the_database_is_rejected(
     )
     try:
         client = _build_client(owner_dsn)
-        client.post(
+        login = client.post(
             "/api/v1/auth/login",
             json={
                 "username": _get_username(owner_connection, user_id),
                 "password": "a real password",
             },
         )
+        assert login.status_code == 200, login.text
         # Directly force the stored session into the past - something the
         # in-memory fake in tests/unit/api/ can only simulate via a
         # FrozenClock, never a genuinely already-expired database row.
@@ -169,13 +177,14 @@ def test_administrator_role_reaches_kill_switches_and_audit_against_a_real_datab
     )
     try:
         client = _build_client(owner_dsn)
-        client.post(
+        login = client.post(
             "/api/v1/auth/login",
             json={
                 "username": _get_username(owner_connection, user_id),
                 "password": "a real password",
             },
         )
+        assert login.status_code == 200, login.text
         assert client.get("/api/v1/kill-switches").status_code == 200
         assert client.get("/api/v1/audit/events").status_code == 200
     finally:
@@ -193,13 +202,14 @@ def test_viewer_role_is_forbidden_from_kill_switches_against_a_real_database(
     )
     try:
         client = _build_client(owner_dsn)
-        client.post(
+        login = client.post(
             "/api/v1/auth/login",
             json={
                 "username": _get_username(owner_connection, user_id),
                 "password": "a real password",
             },
         )
+        assert login.status_code == 200, login.text
         response = client.get("/api/v1/kill-switches")
         assert response.status_code == 403
         assert response.json()["code"] == "FORBIDDEN"

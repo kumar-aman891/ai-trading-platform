@@ -51,7 +51,15 @@ def _build_client(owner_dsn: str) -> TestClient:
     engine = create_async_engine(_as_async_psycopg_url(owner_dsn))
     session_factory = make_session_factory(engine)
     app = create_app(settings=settings, api_settings=ApiSettings(), session_factory=session_factory)
-    return TestClient(app, base_url="https://testserver")
+    # `client=` overrides Starlette's default ("testclient", 50000). The
+    # login route records `request.client.host` into
+    # `core.sessions.ip_address`, which is a Postgres `INET` column - the
+    # literal string "testclient" is not a valid inet value, so the
+    # default makes every real-database login fail with `DataError` ->
+    # 503. Only surfaced on the first real run against Postgres (Phase 1
+    # Step 12 Phase A); against the in-memory fakes in tests/unit/api/
+    # there is no INET column to reject it.
+    return TestClient(app, base_url="https://testserver", client=("127.0.0.1", 50000))
 
 
 def _insert_admin_user(

@@ -114,25 +114,44 @@ def test_risk_config_permits_toggling_active_flag(
 ) -> None:
     """`active` is the one column the immutability trigger deliberately
     permits changing (docs/schemas/risk_config.md: "activating a new
-    version inserts a row and flips `active`")."""
+    version inserts a row and flips `active`").
+
+    The migration-seeded bootstrap PAPER config is already `active` when
+    this test starts, and `uq_risk_config_one_active_per_mode` (a partial
+    unique index) permits at most one active row per mode - so activating
+    `seeded_risk_config_id` must first deactivate whatever else is active
+    for `PAPER`, exactly as real activation logic would, or the UPDATE
+    below raises `UniqueViolation`. First real run against Postgres
+    (Phase 1 Step 12 Phase A) found this test had never actually
+    exercised that constraint. The bootstrap row's `active` state is
+    restored in `finally` so no later test in this session sees a
+    PAPER mode with zero active configs."""
     with owner_connection.cursor() as cur:
+        cur.execute(
+            "UPDATE core.risk_config SET active = false WHERE mode = 'PAPER' AND active = true"
+        )
         cur.execute(
             "UPDATE core.risk_config SET active = true WHERE risk_config_id = %s",
             (seeded_risk_config_id,),
         )
     owner_connection.commit()
 
-    with owner_connection.cursor() as cur:
-        cur.execute(
-            "SELECT active FROM core.risk_config WHERE risk_config_id = %s",
-            (seeded_risk_config_id,),
-        )
-        (active,) = cur.fetchone()  # type: ignore[misc]
-    assert active is True
-
-    with owner_connection.cursor() as cur:
-        cur.execute(
-            "UPDATE core.risk_config SET active = false WHERE risk_config_id = %s",
-            (seeded_risk_config_id,),
-        )
-    owner_connection.commit()
+    try:
+        with owner_connection.cursor() as cur:
+            cur.execute(
+                "SELECT active FROM core.risk_config WHERE risk_config_id = %s",
+                (seeded_risk_config_id,),
+            )
+            (active,) = cur.fetchone()  # type: ignore[misc]
+        assert active is True
+    finally:
+        with owner_connection.cursor() as cur:
+            cur.execute(
+                "UPDATE core.risk_config SET active = false WHERE risk_config_id = %s",
+                (seeded_risk_config_id,),
+            )
+            cur.execute(
+                "UPDATE core.risk_config SET active = true "
+                "WHERE mode = 'PAPER' AND created_by IS NULL AND version = 1"
+            )
+        owner_connection.commit()

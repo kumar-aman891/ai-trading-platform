@@ -94,7 +94,15 @@ def test_downgrade_base_then_upgrade_head_is_idempotent(owner_dsn: str) -> None:
         assert down_result.returncode == 0, down_result.stderr
 
         with psycopg.connect(owner_dsn, connect_timeout=3) as conn:
-            assert _existing_tables(conn, {"core", "audit", "paper"}) == set()
+            # core.alembic_version is Alembic's own version-tracking table
+            # (env.py's version_table_schema="core"), not something any
+            # migration's downgrade() creates or drops - it legitimately
+            # persists (with zero rows) at `base`. First real run against
+            # Postgres (Phase 1 Step 12 Phase A) found this assertion had
+            # never actually accounted for it.
+            assert _existing_tables(conn, {"core", "audit", "paper"}) == {
+                ("core", "alembic_version")
+            }
     finally:
         up_result = _run_alembic("upgrade", "head", sync_url=sync_url)
         assert up_result.returncode == 0, up_result.stderr
@@ -109,7 +117,7 @@ def test_alembic_version_table_reports_head_after_upgrade(
     with owner_connection.cursor() as cur:
         cur.execute("SELECT version_num FROM core.alembic_version")
         (version,) = cur.fetchone()  # type: ignore[misc]
-        assert version == "0003_table_grants"
+        assert version == "0004_paper_cash_ledger_seed"
 
 
 def test_kill_switch_state_seed_rows_present(

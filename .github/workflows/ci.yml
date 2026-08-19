@@ -2,10 +2,7 @@ name: CI
 
 on:
   push:
-    # TEMPORARY (Phase 1 Step 12 Phase A iteration): step12-phase-a-verify
-    # added so this branch's pushes trigger CI directly, since PR creation
-    # isn't available in this pass. Remove before merging to main.
-    branches: [main, step12-phase-a-verify]
+    branches: [main]
   pull_request:
 
 # Least-privilege default; individual jobs opt into more only if needed.
@@ -51,12 +48,6 @@ jobs:
   integration:
     name: Integration tests (real PostgreSQL/Redis via Docker)
     runs-on: ubuntu-latest
-    # TEMPORARY (step12-phase-a-verify iteration only): issues: write lets
-    # the diagnostic-on-failure step below post a log excerpt somewhere
-    # readable without log-download auth. Remove before merging to main.
-    permissions:
-      contents: read
-      issues: write
     steps:
       - uses: actions/checkout@v4
 
@@ -95,11 +86,11 @@ jobs:
             exit 1
           }
 
-      # Phase 1 Step 12 Phase A iteration (step12-phase-a-verify branch only):
-      # continue-on-error deliberately dropped here so a genuine failure
-      # shows up as an unambiguous job failure while this data plane is
-      # being verified for the first time, rather than being masked. Not
-      # yet proven green - do not read this branch's CI state as proof.
+      # This job carried `continue-on-error: true` from Step 5 until Phase 1
+      # Step 12 Phase A, because these tests had never executed anywhere.
+      # They have now: the suite runs green against a real PostgreSQL/Redis
+      # stack, so the flag is gone and an integration failure fails CI.
+      # Do not reintroduce it.
       - name: Run integration suite against a real stack (ATP_REQUIRE_INTEGRATION_STACK=1)
         env:
           ATP_REQUIRE_INTEGRATION_STACK: "1"
@@ -107,56 +98,6 @@ jobs:
           set -o pipefail
           make test-integration 2>&1 | tee /tmp/integration.log
 
-      # TEMPORARY (step12-phase-a-verify iteration only): raw job logs
-      # require authenticated access even on a public repo, so this posts
-      # the last part of the captured output as an issue (readable via the
-      # unauthenticated public API) purely to unblock iteration. Remove
-      # before merging to main.
-      # `always()`, not `failure()`: a clean job exit is not evidence of a
-      # clean *suite* - pytest reporting "78 skipped" exits 0 too. The
-      # Phase A gate is the count line itself, so it has to be readable on
-      # a successful run as well.
-      - name: Post diagnostic log (temporary, iteration-only)
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # pytest reports setup/teardown (fixture) failures in a separate
-          # "ERRORS" section, distinct from "FAILURES" (assertion/body
-          # failures) - both matter, but ERRORS is usually the smaller,
-          # more load-bearing one when a connection gets poisoned mid-run
-          # (the fixture error is the actual root cause; every FAILURES
-          # entry after it is downstream noise). Capture ERRORS in full
-          # (bounded to 30000 chars) plus the head of FAILURES (bounded to
-          # 25000 chars, since it can otherwise exceed GitHub's 65536-char
-          # issue body limit on its own) - together, comfortably under that
-          # limit.
-          if grep -q " ERRORS " /tmp/integration.log; then
-            ERRORS_SECTION=$(awk '/ ERRORS /{f=1} f; /short test summary info/{exit}' /tmp/integration.log | head -c 30000)
-          else
-            ERRORS_SECTION="(none)"
-          fi
-          if grep -q "FAILURES" /tmp/integration.log; then
-            FAILURES_SECTION=$(sed -n '/FAILURES/,$p' /tmp/integration.log | head -c 25000)
-          else
-            FAILURES_SECTION="(none)"
-          fi
-          SKIPPED=$(grep -E '^SKIPPED' /tmp/integration.log | head -c 4000)
-          LIFECYCLE=$(grep -E '^=+ .*(passed|failed|error|skipped).* =+$' /tmp/lifecycle.log 2>/dev/null | tail -2)
-          [ -n "$LIFECYCLE" ] || LIFECYCLE="(lifecycle step did not run)"
-          [ -n "$SKIPPED" ] || SKIPPED="(none)"
-          COUNTS=$(grep -E '^=+ .*(passed|failed|error|skipped).* =+$' /tmp/integration.log | tail -5)
-          COLLECTED=$(grep -E '^collected [0-9]+ item' /tmp/integration.log | tail -2)
-          TAIL=$(printf '=== COLLECTED ===\n%s\n\n=== COUNTS (in-container) ===\n%s\n\n=== COUNTS (host-side lifecycle) ===\n%s\n\n=== SKIPPED ===\n%s\n\n=== ERRORS (fixture/setup failures) ===\n%s\n\n=== FAILURES (head) ===\n%s' "$COLLECTED" "$COUNTS" "$LIFECYCLE" "$SKIPPED" "$ERRORS_SECTION" "$FAILURES_SECTION")
-          jq -n \
-            --arg title "CI integration ${{ job.status }}: run ${{ github.run_id }} (${{ github.sha }})" \
-            --arg body "$(printf '```\n%s\n```\n' "$TAIL")" \
-            '{title: $title, body: $body}' > /tmp/issue_body.json
-          curl -s -X POST \
-            -H "Authorization: token ${GH_TOKEN}" \
-            -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${{ github.repository }}/issues" \
-            -d @/tmp/issue_body.json
 
   secret-scan:
     name: Secret scan (gitleaks)

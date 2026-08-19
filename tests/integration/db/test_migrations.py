@@ -117,7 +117,63 @@ def test_alembic_version_table_reports_head_after_upgrade(
     with owner_connection.cursor() as cur:
         cur.execute("SELECT version_num FROM core.alembic_version")
         (version,) = cur.fetchone()  # type: ignore[misc]
-        assert version == "0004_paper_cash_ledger_seed"
+        assert version == "0005_job_queue_claim_constraints"
+
+
+_JOB_QUEUE_CONSTRAINTS = {
+    "ux_job_queue_one_live_per_type",
+    "ck_job_queue_terminal_state_has_completed_at",
+    "ck_job_queue_attempts_within_bounds",
+}
+
+
+def _job_queue_constraint_names(conn: psycopg.Connection) -> set[str]:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT conname FROM pg_constraint "
+            "WHERE conrelid = 'core.job_queue'::regclass AND conname = ANY(%s)",
+            (list(_JOB_QUEUE_CONSTRAINTS),),
+        )
+        check_names = {row[0] for row in cur.fetchall()}
+        cur.execute(
+            "SELECT indexname FROM pg_indexes "
+            "WHERE schemaname = 'core' AND tablename = 'job_queue' AND indexname = ANY(%s)",
+            (list(_JOB_QUEUE_CONSTRAINTS),),
+        )
+        index_names = {row[0] for row in cur.fetchall()}
+    return check_names | index_names
+
+
+def test_downgrade_to_0004_then_upgrade_to_0005_restores_job_queue_constraints(
+    owner_dsn: str, owner_connection: psycopg.Connection
+) -> None:
+    """Migration 0005_job_queue_claim_constraints (ADR-013) hand-writes
+    DDL rather than deriving it from Base.metadata.sorted_tables (unlike
+    migration 0001) - the only way to prove both directions of that DDL
+    are actually correct, not merely declared, is to run them against a
+    real database. Always leaves the database at head, regardless of
+    outcome, so later tests are never stranded on 0004's schema."""
+    sync_url = _as_sync_psycopg_url(owner_dsn)
+    try:
+        down_result = _run_alembic("downgrade", "0004_paper_cash_ledger_seed", sync_url=sync_url)
+        assert down_result.returncode == 0, down_result.stderr
+
+        with psycopg.connect(owner_dsn, connect_timeout=3) as conn:
+            assert _job_queue_constraint_names(conn) == set()
+
+        up_result = _run_alembic("upgrade", "head", sync_url=sync_url)
+        assert up_result.returncode == 0, up_result.stderr
+    finally:
+        # Idempotent if the block above already succeeded; guarantees head
+        # even if downgrade or the first upgrade attempt failed midway.
+        final_result = _run_alembic("upgrade", "head", sync_url=sync_url)
+        assert final_result.returncode == 0, final_result.stderr
+
+    with owner_connection.cursor() as cur:
+        cur.execute("SELECT version_num FROM core.alembic_version")
+        (version,) = cur.fetchone()  # type: ignore[misc]
+    assert version == "0005_job_queue_claim_constraints"
+    assert _job_queue_constraint_names(owner_connection) == _JOB_QUEUE_CONSTRAINTS
 
 
 def test_kill_switch_state_seed_rows_present(

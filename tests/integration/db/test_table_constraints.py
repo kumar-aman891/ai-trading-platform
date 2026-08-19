@@ -314,3 +314,274 @@ def _prepare_decision(conn: psycopg.Connection, instrument_id: str, user_id: str
         )
     conn.commit()
     return decision_id
+
+
+# --- core.job_queue (migration 0005_job_queue_claim_constraints, ADR-013) ---
+
+
+def _insert_job(
+    conn: psycopg.Connection,
+    *,
+    job_id: str,
+    job_type: str,
+    status: str = "PENDING",
+    attempts: int = 0,
+    max_attempts: int = 3,
+    completed_at_set: bool = False,
+) -> None:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO core.job_queue
+                (job_id, job_type, payload, status, attempts, max_attempts,
+                 scheduled_for, completed_at, created_at)
+            VALUES
+                (%s, %s, '{}', %s, %s, %s, now(),
+                 CASE WHEN %s THEN now() ELSE NULL END, now())
+            """,
+            (job_id, job_type, status, attempts, max_attempts, completed_at_set),
+        )
+    conn.commit()
+
+
+def _delete_job(conn: psycopg.Connection, job_id: str) -> None:
+    with conn.cursor() as cur:
+        cur.execute("DELETE FROM core.job_queue WHERE job_id = %s", (job_id,))
+    conn.commit()
+
+
+def test_job_queue_accepts_a_well_formed_pending_row(
+    owner_connection: psycopg.Connection,
+) -> None:
+    """The baseline valid state (ADR-013 Section 3-4) must remain
+    insertable - these constraints must reject only malformed rows,
+    never legitimate ones."""
+    job_id = _new_uuid()
+    try:
+        _insert_job(owner_connection, job_id=job_id, job_type="RETENTION")
+    finally:
+        _delete_job(owner_connection, job_id)
+
+
+def test_job_queue_rejects_a_second_pending_job_of_the_same_type(
+    owner_connection: psycopg.Connection,
+) -> None:
+    """ADR-013 Section 6: ux_job_queue_one_live_per_type - at most one
+    PENDING-or-RUNNING row per job_type, enforced by the database so the
+    scheduler's insert path is insert-then-catch, not check-then-insert."""
+    job_id_a, job_id_b = _new_uuid(), _new_uuid()
+    _insert_job(owner_connection, job_id=job_id_a, job_type="SESSION_REAP")
+    try:
+        with pytest.raises(psycopg.errors.UniqueViolation), owner_connection.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO core.job_queue
+                    (job_id, job_type, payload, status, attempts, max_attempts,
+                     scheduled_for, created_at)
+                VALUES (%s, 'SESSION_REAP', '{}', 'PENDING', 0, 3, now(), now())
+                """,
+                (job_id_b,),
+            )
+        owner_connection.rollback()
+    finally:
+        _delete_job(owner_connection, job_id_a)
+
+
+def test_job_queue_rejects_a_running_job_colliding_with_a_pending_one_of_the_same_type(
+    owner_connection: psycopg.Connection,
+) -> None:
+    """The partial index covers PENDING and RUNNING together - a RUNNING
+    row is still "live" and must not coexist with a PENDING row of the
+    same job_type either."""
+    job_id_a, job_id_b = _new_uuid(), _new_uuid()
+    _insert_job(
+        owner_connection, job_id=job_id_a, job_type="AUDIT_INTEGRITY_CHECK", status="RUNNING"
+    )
+    try:
+        with pytest.raises(psycopg.errors.UniqueViolation), owner_connection.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO core.job_queue
+                    (job_id, job_type, payload, status, attempts, max_attempts,
+                     scheduled_for, created_at)
+                VALUES (%s, 'AUDIT_INTEGRITY_CHECK', '{}', 'PENDING', 0, 3, now(), now())
+                """,
+                (job_id_b,),
+            )
+        owner_connection.rollback()
+    finally:
+        _delete_job(owner_connection, job_id_a)
+
+
+def test_job_queue_allows_one_live_job_per_distinct_type_simultaneously(
+    owner_connection: psycopg.Connection,
+) -> None:
+    """The uniqueness is scoped to job_type, not table-wide - three live
+    jobs of three different types coexist without conflict."""
+    job_ids = [_new_uuid(), _new_uuid(), _new_uuid()]
+    job_types = ["SESSION_REAP", "AUDIT_INTEGRITY_CHECK", "RETENTION"]
+    try:
+        for job_id, job_type in zip(job_ids, job_types, strict=True):
+            _insert_job(owner_connection, job_id=job_id, job_type=job_type)
+    finally:
+        for job_id in job_ids:
+            _delete_job(owner_connection, job_id)
+
+
+def test_job_queue_allows_a_new_pending_job_once_the_prior_one_is_terminal(
+    owner_connection: psycopg.Connection,
+) -> None:
+    """The partial index only covers PENDING/RUNNING - once a job reaches
+    a terminal state, a fresh recurring job of the same type may be
+    scheduled (ADR-013 Section 6's recurring-singleton model)."""
+    job_id_a, job_id_b = _new_uuid(), _new_uuid()
+    _insert_job(owner_connection, job_id=job_id_a, job_type="RETENTION")
+    try:
+        with owner_connection.cursor() as cur:
+            cur.execute(
+                "UPDATE core.job_queue SET status = 'SUCCEEDED', completed_at = now() "
+                "WHERE job_id = %s",
+                (job_id_a,),
+            )
+        owner_connection.commit()
+
+        _insert_job(owner_connection, job_id=job_id_b, job_type="RETENTION")
+    finally:
+        _delete_job(owner_connection, job_id_a)
+        _delete_job(owner_connection, job_id_b)
+
+
+@pytest.mark.parametrize("status", ["PENDING", "RUNNING"])
+def test_job_queue_rejects_a_non_terminal_row_with_completed_at_set(
+    owner_connection: psycopg.Connection, status: str
+) -> None:
+    """ADR-013 Section 3: completed_at must be NULL for PENDING/RUNNING
+    rows - ck_job_queue_terminal_state_has_completed_at."""
+    job_id = _new_uuid()
+    with pytest.raises(psycopg.errors.CheckViolation), owner_connection.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO core.job_queue
+                (job_id, job_type, payload, status, attempts, max_attempts,
+                 scheduled_for, completed_at, created_at)
+            VALUES (%s, 'RETENTION', '{}', %s, 0, 3, now(), now(), now())
+            """,
+            (job_id, status),
+        )
+    owner_connection.rollback()
+
+
+@pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED"])
+def test_job_queue_rejects_a_terminal_row_without_completed_at(
+    owner_connection: psycopg.Connection, status: str
+) -> None:
+    """ADR-013 Section 3: a terminal row (SUCCEEDED/FAILED) must always
+    carry a completed_at - ck_job_queue_terminal_state_has_completed_at."""
+    job_id = _new_uuid()
+    with pytest.raises(psycopg.errors.CheckViolation), owner_connection.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO core.job_queue
+                (job_id, job_type, payload, status, attempts, max_attempts,
+                 scheduled_for, created_at)
+            VALUES (%s, 'RETENTION', '{}', %s, 1, 3, now(), now())
+            """,
+            (job_id, status),
+        )
+    owner_connection.rollback()
+
+
+@pytest.mark.parametrize("status", ["SUCCEEDED", "FAILED"])
+def test_job_queue_accepts_a_terminal_row_with_completed_at(
+    owner_connection: psycopg.Connection, status: str
+) -> None:
+    """The valid terminal state must remain insertable."""
+    job_id = _new_uuid()
+    try:
+        _insert_job(
+            owner_connection,
+            job_id=job_id,
+            job_type="RETENTION",
+            status=status,
+            attempts=1,
+            completed_at_set=True,
+        )
+    finally:
+        _delete_job(owner_connection, job_id)
+
+
+def test_job_queue_rejects_negative_attempts(owner_connection: psycopg.Connection) -> None:
+    """ADR-013 Section 4: attempts_within_bounds - attempts >= 0."""
+    job_id = _new_uuid()
+    with pytest.raises(psycopg.errors.CheckViolation), owner_connection.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO core.job_queue
+                (job_id, job_type, payload, status, attempts, max_attempts,
+                 scheduled_for, created_at)
+            VALUES (%s, 'RETENTION', '{}', 'PENDING', -1, 3, now(), now())
+            """,
+            (job_id,),
+        )
+    owner_connection.rollback()
+
+
+def test_job_queue_rejects_attempts_exceeding_max_attempts(
+    owner_connection: psycopg.Connection,
+) -> None:
+    """ADR-013 Section 4: attempts can never exceed max_attempts - the
+    claim protocol increments attempts at claim time (Tx A) and stops
+    re-claiming once exhaustion is reached (Tx C moves the row to
+    FAILED), so a row with attempts > max_attempts can only mean a bug
+    or direct tampering, not a legitimate worker state."""
+    job_id = _new_uuid()
+    with pytest.raises(psycopg.errors.CheckViolation), owner_connection.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO core.job_queue
+                (job_id, job_type, payload, status, attempts, max_attempts,
+                 scheduled_for, created_at)
+            VALUES (%s, 'RETENTION', '{}', 'PENDING', 4, 3, now(), now())
+            """,
+            (job_id,),
+        )
+    owner_connection.rollback()
+
+
+def test_job_queue_rejects_max_attempts_of_zero(owner_connection: psycopg.Connection) -> None:
+    """ADR-013 Section 4: max_attempts >= 1 - a row with max_attempts = 0
+    could never be legitimately claimed at all (attempts increments at
+    claim, so the first claim would immediately violate
+    attempts <= max_attempts)."""
+    job_id = _new_uuid()
+    with pytest.raises(psycopg.errors.CheckViolation), owner_connection.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO core.job_queue
+                (job_id, job_type, payload, status, attempts, max_attempts,
+                 scheduled_for, created_at)
+            VALUES (%s, 'RETENTION', '{}', 'PENDING', 0, 0, now(), now())
+            """,
+            (job_id,),
+        )
+    owner_connection.rollback()
+
+
+def test_job_queue_accepts_attempts_equal_to_max_attempts(
+    owner_connection: psycopg.Connection,
+) -> None:
+    """The boundary itself (attempts == max_attempts) is valid - it is
+    the state of a job on its final permitted attempt."""
+    job_id = _new_uuid()
+    try:
+        _insert_job(
+            owner_connection,
+            job_id=job_id,
+            job_type="RETENTION",
+            status="FAILED",
+            attempts=3,
+            max_attempts=3,
+            completed_at_set=True,
+        )
+    finally:
+        _delete_job(owner_connection, job_id)

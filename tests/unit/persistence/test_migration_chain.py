@@ -35,13 +35,14 @@ def test_migration_chain_has_exactly_one_head() -> None:
     script = _script_directory()
     heads = script.get_heads()
     assert len(heads) == 1, f"expected a single linear head, found {heads}"
-    assert heads[0] == "0004_paper_cash_ledger_seed"
+    assert heads[0] == "0005_job_queue_claim_constraints"
 
 
 def test_migration_chain_is_linear_from_base_to_head() -> None:
     script = _script_directory()
     revisions = list(script.walk_revisions())
     assert [r.revision for r in revisions] == [
+        "0005_job_queue_claim_constraints",
         "0004_paper_cash_ledger_seed",
         "0003_table_grants",
         "0002_seed_fixture_instruments",

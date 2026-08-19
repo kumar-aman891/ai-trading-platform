@@ -223,6 +223,38 @@ class JobQueueRow(Base):
             "scheduled_for",
             postgresql_where=text("status = 'PENDING'"),
         ),
+        # ADR-013 §6: `scheduler.py`'s `ensure_recurring_jobs_scheduled()`
+        # is the sole producer of rows, one pending-or-running row per
+        # `job_type`, enforced here at the database level so the insert
+        # path is "insert, catch IntegrityError" rather than
+        # check-then-insert (the UNIQUE(proposal_id)/UNIQUE(client_request_id)
+        # precedent from Steps 9 and 10). Added in migration
+        # 0005_job_queue_claim_constraints - see that file for the
+        # hand-written DDL, since this table was originally created by
+        # migration 0001's Base.metadata.sorted_tables walk, not by this
+        # model definition being re-applied.
+        Index(
+            "ux_job_queue_one_live_per_type",
+            "job_type",
+            unique=True,
+            postgresql_where=text("status IN ('PENDING','RUNNING')"),
+        ),
+        # ADR-013 §3: `completed_at` is set exactly when a job reaches a
+        # terminal state (SUCCEEDED/FAILED), and never otherwise - a
+        # PENDING/RUNNING row must not carry a completion timestamp, and a
+        # terminal row must not lack one. Added in migration 0005.
+        CheckConstraint(
+            "(status IN ('SUCCEEDED','FAILED')) = (completed_at IS NOT NULL)",
+            name="terminal_state_has_completed_at",
+        ),
+        # ADR-013 §4: `attempts` increments at claim (Tx A), never exceeds
+        # `max_attempts`, and `max_attempts` itself is always at least 1 -
+        # a job with `max_attempts = 0` could never be claimed at all.
+        # Added in migration 0005.
+        CheckConstraint(
+            "attempts >= 0 AND attempts <= max_attempts AND max_attempts >= 1",
+            name="attempts_within_bounds",
+        ),
         {"schema": _SCHEMA},
     )
 

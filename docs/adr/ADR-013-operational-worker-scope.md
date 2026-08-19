@@ -104,7 +104,20 @@ it against; revisit once real job volume exists.
 `expires_at < now() AND revoked_at IS NULL` using only the three granted
 columns, and emits one structured log line plus a metric
 (`atp_worker.session_reap.expired_unrevoked_count`). **No state change, no
-audit event.** `core.sessions` is never written by this job type, this
+audit event.**
+
+*Metric emission is deferred, explicitly (Step 12 Phase B implementation
+review).* The structured log line ships in Phase B; the named counter does
+not. `platform/src/atp_platform/metrics.py` provides registry factory
+primitives only and its own docstring records that no Phase 1 service
+emits a concrete metric yet — "the `/metrics` route and the first real
+counters are Phase 1 Step 13+". Registering this platform's first-ever
+concrete counter from inside a worker handler would contradict that
+sequencing and put the first metric on a surface with no route to scrape
+it. The metric name above is fixed by this ADR and is wired in the step
+that turns metrics on; until then `SESSION_REAP`'s observation is
+available in structured logs only. This is a deferral of *emission*, not a
+weakening of the observation-only decision below. `core.sessions` is never written by this job type, this
 process, or any future job type added under this name — a security
 boundary, not an implementation gap. This corrects `session.md`'s wording
 (§6). There is no security exposure this leaves open:
@@ -242,10 +255,10 @@ enforced at the database level by migration 0005's
 `UNIQUE(proposal_id)` / `UNIQUE(client_request_id)` precedent from Steps 9
 and 10). Recurrence cadence per type:
 
-- `AUDIT_INTEGRITY_CHECK`: every 15 minutes, `window_start`/`window_end`
-  computed as the prior, now-closed 15-minute boundary — chosen so every
-  window is attested exactly once shortly after it closes, with no gap
-  and no overlap.
+- `AUDIT_INTEGRITY_CHECK`: **every 5 minutes over 15-minute windows** —
+  each window attested once shortly after it closes and re-attested twice
+  more afterwards. Specified precisely in §6a below; that subsection is
+  normative for `scheduler.py`.
 - `RETENTION`: once per day.
 - `SESSION_REAP`: every 5 minutes — frequent enough that the emitted
   metric is useful for alerting, cheap enough (a single indexed count
@@ -256,6 +269,114 @@ configuration, matching this repository's existing preference for typed
 constants over a scheduling DSL (rejected explicitly, both in the original
 reconnaissance and here: "no cron/config scheduling DSL" is out of scope
 for Phase 1).
+
+### 6a. `AUDIT_INTEGRITY_CHECK` window selection (normative)
+
+**Windows are deliberately re-attested.** This subsection replaces this
+section's original wording — "every 15 minutes… attested exactly once
+shortly after it closes, with no gap and no overlap" — which contradicted
+§2's "a later run over the *same* window recomputes the aggregate and
+compares it against the attested value read back from the ledger."
+Attesting each window exactly once leaves that comparison with no prior to
+compare against, making detection unreachable in production. §6 was the
+defective section, not §2: its wording was written to guarantee *coverage*
+and inadvertently foreclosed *re-checking*. The evidence that
+re-attestation is the intended semantics, not a later embellishment, is
+that removing it would strand four things that already exist — §2's
+detection claim, §7's value-idempotence rule (which exists only because
+the same window is expected to be attested more than once), §9's
+`max_recorded_at` key (whose sole purpose is to be compared against on a
+later run), and the `ACTION_AUDIT_INTEGRITY_VIOLATION_DETECTED` constant
+together with the handler's entire comparison path. Under a
+durable-record-for-offline-comparison reading, all four would be inert
+code and dead vocabulary. That reading is therefore rejected.
+
+**A tick rate faster than the window-close rate is forced, not chosen.**
+Migration 0005's `ux_job_queue_one_live_per_type` permits at most one
+`PENDING`-or-`RUNNING` `AUDIT_INTEGRITY_CHECK` row at any instant, so each
+scheduler tick may enqueue exactly one window. Coverage requires the
+attestation frontier to advance once per window that closes. If ticks and
+window closes occur at the same rate, every tick is consumed by coverage
+and none remains for a re-check. The tick interval must therefore be
+strictly shorter than the window width — a consequence of an
+already-migrated, PostgreSQL-verified constraint plus §6's own coverage
+requirement, not a preference.
+
+**The rule.** All arithmetic is in whole UTC seconds since the Unix epoch,
+using the injected `Clock` (§12):
+
+```
+WINDOW_WIDTH_SECONDS      = 900   # 15 minutes
+SCHEDULE_TICK_SECONDS     = 300   # 5 minutes
+RECHECK_CYCLE             = WINDOW_WIDTH_SECONDS // SCHEDULE_TICK_SECONDS   # 3
+
+tick_index    = floor(now_epoch_seconds / SCHEDULE_TICK_SECONDS)
+lag           = tick_index mod RECHECK_CYCLE                  # 0, 1, or 2
+newest_closed = floor(now_epoch_seconds / WINDOW_WIDTH_SECONDS) - 1
+target        = newest_closed - lag
+
+window_start  = target * WINDOW_WIDTH_SECONDS      # UTC, tz-aware
+window_end    = window_start + WINDOW_WIDTH_SECONDS
+```
+
+If `target < 0` (a system younger than one window), enqueue nothing this
+tick. `scheduled_for` is the tick boundary itself,
+`tick_index * SCHEDULE_TICK_SECONDS`. Payload carries `window_start` and
+`window_end` as tz-aware ISO-8601 UTC strings — the two keys the handler
+already parses and rejects as non-retryable when malformed. Both bounds
+are fixed at enqueue and never recomputed at run time (§2, §7).
+
+**Properties this yields**, each verifiable by substitution rather than by
+reasoning about the implementation:
+
+- *Coverage, exactly once.* `lag = 0` occurs on exactly one tick in every
+  15-minute period, and at that tick `target = newest_closed` is the
+  window that just closed. Every window is therefore attested a first
+  time exactly once, shortly after closing. **No gap and no overlap** —
+  the original §6 guarantee — is preserved, and refers to *window bounds*
+  tiling the timeline without gap or overlap, never to the number of
+  attestations a window receives.
+- *Re-checks.* The `lag = 1` and `lag = 2` ticks re-attest windows that
+  closed earlier. Each window is attested exactly three times: at **+0,
+  +20, and +40 minutes** after it closes, making §2's comparison
+  reachable on the second and third. (The re-check offsets are +20/+40
+  rather than +15/+30 because `lag` shifts the target by whole *windows*
+  while the tick that carries a given `lag` sits one or two *ticks* into
+  the containing window — the two effects compound. Verify by
+  substitution before changing either constant.)
+- *Detection horizon.* Tampering with an already-attested window is
+  detected if it occurs before that window's third attestation — **40
+  minutes** after the window closes. Beyond that horizon this mechanism
+  is silent, which is a direct consequence of holding only `SELECT,
+  INSERT` and is exactly the limitation §2 already states ("proves
+  nothing about tampering *within* a still-open window", no cryptographic
+  linkage — Phase 4, ADR-010).
+- *Comparison target.* The handler compares against the **most recent**
+  prior attestation for identical bounds (`list_recent` orders
+  `occurred_at DESC`). A violation surfaced at the `lag = 1` re-check is
+  therefore not re-reported at `lag = 2`, matching §2's intent to surface
+  a tamper signal "once, clearly."
+- *Prior-attestation lookup depth is sufficient.* One attestation per
+  5-minute tick is 12 per hour; the handler's 200-event search covers
+  roughly 16 hours, while the priors it must find are 3 and 6
+  attestations back. This closes the depth question this ADR previously
+  left open — 200 is sufficient by two orders of magnitude, and a
+  bounds-indexed lookup is unnecessary at Phase 1 cadence.
+- *Self-healing after downtime is deliberately not claimed.* Because
+  window selection is a pure function of the clock and consults no
+  ledger state, a worker that was down for an hour does not later
+  backfill the windows it missed. Those windows are simply never
+  attested. This keeps `scheduler.py` stateless and its insert path
+  "insert, catch `IntegrityError`" (§6) rather than a
+  query-the-ledger-then-decide path; backfill is named as deferred in
+  §15 rather than built here.
+
+`WINDOW_WIDTH_SECONDS` and `SCHEDULE_TICK_SECONDS` are application
+constants in `scheduler.py`, joining `RETENTION_WINDOW_DAYS` and
+`LEASE_DURATION` as values fixed in code rather than configuration
+(§14/§15). `RECHECK_CYCLE` is derived from the other two and must not be
+set independently: the properties above hold only while
+`WINDOW_WIDTH_SECONDS` is an exact multiple of `SCHEDULE_TICK_SECONDS`.
 
 ### 7. Idempotency
 
@@ -294,14 +415,32 @@ schema-level column-length constraint (the column remains an untruncated
 `atp_domain.audit.AuditEvent.source_refs` is typed `Mapping[str, str]`
 (`domain/src/atp_domain/audit.py:48`) and this ADR does not change that
 type. `AUDIT_INTEGRITY_CHECK`'s non-string observed values —
-`observed_count` (int), `max_event_id` (uuid) — are encoded as their
-`str()` representation before being placed in `source_refs`, exactly as
+`observed_count` (int), `max_event_id` (uuid), `max_recorded_at`
+(datetime) — are encoded as their `str()` representation before being
+placed in `source_refs` (a datetime as `.isoformat()`; a `None` maximum,
+which occurs only for an empty window, as `""`), exactly as
 every other numeric/UUID value already flowing through `source_refs`
 elsewhere in this codebase is stringified at the call site (there is no
 precedent anywhere in `atp_domain.audit` for a non-string value in this
 mapping; this ADR does not create one). Keys:
 `{job_id, job_type, window_start, window_end, observed_count,
-max_event_id}`, all `str`.
+max_event_id, max_recorded_at}`, all `str`.
+
+**Correction (Step 12 Phase B implementation review).** This section
+originally enumerated six keys, omitting `max_recorded_at` — an
+inconsistency with §2, which defines the attestation as the three-value
+tuple `(count(*), max(event_id), max(recorded_at))`. The six-key list was
+the error and is corrected here rather than the implementation being
+trimmed to match it: §2's claim that this mechanism detects *backdating
+into an already-attested window* is only provable if the attested
+`max(recorded_at)` is stored to compare a later run against. Because the
+window is filtered on `occurred_at` while `recorded_at` records genuine
+insert time, a row written into a closed window after it was attested
+raises `max(recorded_at)` past the attested value — and it is the only one
+of the three values that necessarily moves when a deletion and a backdated
+insertion are paired so that both `count(*)` and `max(event_id)` are
+preserved. Attesting a value §2 requires computing but never storing would
+make that section's detection claim unverifiable by construction.
 
 ### 10. Worker DSN and settings wiring
 
@@ -344,6 +483,19 @@ Phase 1 service already uses, never from a bare `datetime.now()` call
 inside `runner.py` or any handler. This is what makes `run_poll_loop`
 deterministically testable with a `FrozenClock`, matching
 `tests/unit/exec_paper/`'s existing convention.
+
+Concretely, `JobHandler` (§11) is
+`async (WorkerUnitOfWork, ClaimedJob, *, clock: Clock, id_generator:
+IdGenerator) -> None`. `id_generator` accompanies `clock` for the same
+reason and as the same pair `atp_exec_paper.gateway` already threads
+through every function that mints a record: §2 requires
+`AUDIT_INTEGRITY_CHECK` to write an `AuditEvent`, whose `event_id` must be
+minted, and a handler that reached for a module-level generator would be
+as untestable as one that reached for `datetime.now()`. Both are injected,
+neither is ambient. A handler that needs neither still accepts both —
+keeping one uniform registry signature rather than a per-handler one is
+what lets `runner` dispatch through `HANDLER_REGISTRY` without
+introspection.
 
 ### 13. Safety boundary
 
@@ -389,7 +541,12 @@ in Phase 1). A real data-retention/compliance policy and its owner (does
 not exist anywhere in this repository today; `RETENTION`'s job-table
 housekeeping is not a substitute for one). Hash chaining for audit
 integrity (Phase 4, ADR-010, needs a `prev_hash` column this ADR does not
-add). Physical session deletion. Worker containerization and Docker
+add). Backfill of `AUDIT_INTEGRITY_CHECK` windows missed while the worker
+was down (§6a selects windows as a pure function of the clock and
+consults no ledger state, so missed windows are never attested rather
+than caught up later; backfill would require the scheduler to query the
+audit ledger before deciding, which Phase 1 does not need). Physical
+session deletion. Worker containerization and Docker
 hardening (blocked on runnable app containers not existing yet —
 `docker-compose.yml` defines only `postgres` and `redis`).
 
@@ -416,7 +573,28 @@ hardening (blocked on runnable app containers not existing yet —
 
 ## Ambiguity not resolved by this ADR
 
-None identified as implementation-blocking. Two items are deliberately
+**Resolved (was blocking for the scheduler step).** The §2-versus-§6
+contradiction recorded here previously — §2 requiring a later run over the
+same window to compare against a prior attestation, §6 attesting each
+window exactly once and so leaving no prior to compare against — is
+settled in **§6a**: windows are deliberately re-attested, §6's wording was
+the defect, and window selection is now specified as an exact arithmetic
+rule. The dependent question of prior-attestation lookup depth is settled
+there too: 200 events is sufficient by roughly two orders of magnitude at
+the specified cadence.
+
+What §6a fixes by *choice* rather than by derivation, and may be tuned
+without reopening this ADR: `WINDOW_WIDTH_SECONDS = 900` and
+`SCHEDULE_TICK_SECONDS = 300`, which together set how many times each
+window is re-attested (twice) and the resulting 40-minute detection
+horizon. The original specification determined *that* re-attestation
+happens and — via migration 0005's one-live-job-per-type index — *that*
+ticks must outpace window closes, but it fixed no particular number of
+re-checks. These two constants join `RETENTION_WINDOW_DAYS` and
+`LEASE_DURATION` below as values chosen without production traffic to size
+them against.
+
+Two further items are deliberately
 left as tunable constants rather than researched values, because no
 production traffic exists yet to size them against: `RETENTION_WINDOW_DAYS
 = 7` (§2) and `LEASE_DURATION = 300s` (§5). Both are named, both are

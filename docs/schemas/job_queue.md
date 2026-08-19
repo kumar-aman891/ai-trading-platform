@@ -33,17 +33,53 @@ broker in Phase 1.
   check-then-insert (mirrors `paper.orders`'s `UNIQUE(proposal_id)` and
   `paper.trade_proposals`'s `UNIQUE(client_request_id)`)
 
-## Access pattern
-Workers claim rows via
-`SELECT ... FOR UPDATE SKIP LOCKED WHERE status = 'PENDING' AND scheduled_for <= now() ORDER BY scheduled_for LIMIT 1`,
-per the plan's §6 module design for `atp_worker`. Idempotent re-execution is
-required: a crash mid-job must leave no partial state (tested once
-`atp_worker` is implemented, in a future step - unlike `atp_exec_paper`
-(Phase 1 Step 9, ADR-011), `atp_worker` holds full `SELECT`/`INSERT`/`UPDATE`
-on `core.job_queue`, so `SELECT ... FOR UPDATE SKIP LOCKED` is a legitimate
-claim mechanism for it, unlike for `atp_paper_exec` on `paper.trade_proposals`).
+## Access pattern (ADR-013 "Operational Worker Scope", §3-§6)
+
+`scheduler.py`'s `ensure_recurring_jobs_scheduled()` is the **only**
+producer of rows - one PENDING-or-RUNNING row per `job_type` at a time,
+enforced by `ux_job_queue_one_live_per_type` (insert, catch
+`IntegrityError`, never check-then-insert). `atp_worker` holds full
+`SELECT`/`INSERT`/`UPDATE`/`DELETE` on this table (unlike `atp_paper_exec`
+on `paper.trade_proposals`, ADR-011), so `SELECT ... FOR UPDATE SKIP
+LOCKED` is a legitimate claim mechanism here.
+
+**Three transactions per job, never one:**
+
+1. **Claim (Tx A).**
+   `SELECT ... FOR UPDATE SKIP LOCKED WHERE status = 'PENDING' AND scheduled_for <= now() ORDER BY scheduled_for, job_id LIMIT 1`,
+   then `UPDATE ... SET status='RUNNING', attempts = attempts + 1, locked_at = now(), locked_by = :instance_id`,
+   committed before any handler runs. `attempts` increments **here, at
+   claim**, not on failure - a process that crashes mid-handler still
+   costs exactly one attempt, so a handler that reliably kills the
+   process cannot loop forever uncounted.
+2. **Handler + audit + terminal update (Tx B).** The handler's own work,
+   its `audit.audit_events` insert where applicable (never for
+   `SESSION_REAP`), and `status='SUCCEEDED', completed_at=now(),
+   locked_at=NULL, locked_by=NULL` all commit together (safety invariant
+   #14 - the audit write and the state change it documents are never two
+   transactions).
+3. **Failure (Tx C, a fresh transaction after Tx B rolls back).** Under
+   `max_attempts`: back to `PENDING` with `scheduled_for = now() +
+   backoff(attempts)` (`backoff(n) = min(5 * 2^(n-1), 300)` seconds, no
+   jitter - Phase 1 runs a single instance). Exhausted: `FAILED` with
+   `completed_at` set - terminal, alertable, never retried again. There is
+   no `DEAD_LETTER` state: the claim query already excludes anything not
+   `PENDING`, so `FAILED` is already unreachable by a future claim.
+
+**Lease sweep.** At the top of every poll cycle, in its own transaction: a
+`RUNNING` row whose `locked_at` predates `now() - 300s` (`LEASE_DURATION`,
+an application constant, not a column) is functionally a crashed claim and
+is routed through the same PENDING/FAILED decision as any other failure.
+
+Idempotent re-execution: `RETENTION` and `SESSION_REAP` are naturally
+idempotent (a pure `DELETE ... WHERE completed_at < cutoff` and a pure
+`SELECT`, respectively); `AUDIT_INTEGRITY_CHECK` is *value*-idempotent, not
+row-idempotent - the audit ledger it writes to is append-only, so re
+-attesting the same window produces a second row that must agree with the
+first on every attested value, never a mutation of the first.
 
 ## Security boundary
 Read/write: `atp_worker` only. `atp_worker` holds **no** privileges on
-`paper.orders` or any execution-path table — its job types in Phase 1 never
-touch order state.
+`paper.orders` or any execution-path table, and no `USAGE` on the `paper`
+or `live` schema at all — its three job types never touch order state
+(safety invariant #17, `tests/safety/test_no_execution_path_in_worker.py`).

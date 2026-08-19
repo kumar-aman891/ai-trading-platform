@@ -1,10 +1,14 @@
 # Current Progress
 
-Last committed checkpoint: `45d37a73db53997ae346dfc59bf2d8dce3a8a6f6`
-("feat: complete phase 1 step 10 paper proposal intake and ledger api" -
-Step 10), pushed to `origin/main`. Step 11 (below) is implemented on top of
-this commit but is **not yet committed** - this document describes the
-current working tree, not a new checkpoint commit.
+Last committed checkpoint: `9addfd7` ("fix: update the stale head-version
+assertion for migration 0005" - Step 12 Phase B Step 2, migration
+`0005_job_queue_claim_constraints`). Step 12 Phase B's remaining work -
+`atp_worker`'s repositories, runtime core (`errors.py`/`registry.py`/
+`uow.py`/`runner.py`), all three handlers, `scheduler.py`, `__main__.py`,
+ADR-013 §6a's window-attestation cadence resolution, safety invariant
+#17, import-linter contract 5, and this section's own documentation
+cleanup - is implemented in the working tree as of this section but is
+**not yet committed**.
 
 **Numbering note**: an older, external "approved Phase 1 plan" numbered
 steps differently (risk engine at its Step 11, intent minting at its Step
@@ -35,6 +39,11 @@ step," not a literal promise about which step number will do it.
 - Step 9 PAPER execution gateway (ADR-011)
 - Step 10 PAPER trade-proposal intake and ledger API (ADR-012)
 - Step 11 verification harness integrity (no ADR - see below)
+- Step 12 Phase A - data-plane verification: the 78-test Docker-gated
+  integration suite genuinely passes against real PostgreSQL/Redis,
+  `continue-on-error` removed from CI's `integration` job (see below)
+- Step 12 Phase B - `atp_worker` (ADR-013 "Operational Worker Scope"):
+  implemented in the working tree, not yet committed (see below)
 
 ## Current repository state
 
@@ -398,25 +407,83 @@ append-only triggers, and RBAC-at-DB-level remain unverified. Step 11 made
 the harness incapable of *lying* about that; it did not make the claim
 true.
 
+## Step 12 Phase A - data-plane verification
+
+The gate Step 11 deferred: made the `integration` CI job genuinely pass and
+removed `continue-on-error`. Took several iterations (see the `wip: step12
+phase a iteration N` commits between `3f3bd26` and `671c370`/`00689db`),
+absorbing migration DDL, compose networking, and grant/query interactions
+that had never executed anywhere before this pass - exactly the outcome
+this document's own "do not reinterpret skipped Docker tests as passing"
+instruction existed to prevent from being papered over. Real, previously
+-invisible bugs fixed along the way (`f383e3e` and follow-ups): a
+`TestClient` needing a real IP for `core.sessions.ip_address INET`; audit
+rows being append-only tripping cross-test connection reuse; user-teardown
+ordering; a `Money` scale-cap overflow; several UUID/FK-ordering issues in
+test fixtures themselves, not application code. `0003_table_grants.py`'s
+`downgrade()` defect (a stray `GRANT UPDATE, DELETE, TRUNCATE ON
+audit.audit_events` the Step 5 baseline never granted) was fixed with its
+own regression test, per the reconciliation plan that scoped this phase.
+
+**Result:** the integration job reports 78 passed, 0 skipped, against real
+PostgreSQL/Redis, and `continue-on-error` is gone from
+`.github/workflows/ci.yml`. Migrations 0001-0004, table grants, the
+append-only triggers, and RBAC-at-DB-level are now genuinely verified, not
+merely asserted in code.
+
+## Step 12 Phase B - `atp_worker` (ADR-013 "Operational Worker Scope")
+
+Built on Phase A's verified data plane, per the reconciliation plan's
+"verify, then build" sequencing. ADR-013 written first, then implemented
+in order: migration `0005_job_queue_claim_constraints` (three
+constraints, zero new columns - `ux_job_queue_one_live_per_type`,
+`terminal_state_has_completed_at`, `attempts_within_bounds`; committed and
+verified against real PostgreSQL, `9addfd7`); `repositories/jobs.py` and
+`repositories/session_observations.py`; the worker runtime core
+(`errors.py`, `registry.py`, `uow.py`, `runner.py` - three-transaction
+claim protocol, ADR-013 §3); all three handlers
+(`AUDIT_INTEGRITY_CHECK`/`RETENTION`/`SESSION_REAP`); `scheduler.py` and
+`__main__.py`.
+
+One genuine ADR defect was found and corrected during implementation
+review, not silently patched: ADR-013's original §6 ("every window
+attested exactly once, no gap and no overlap") contradicted its own §2
+("a later run over the same window... compares it against the attested
+value") - under the original wording, no window was ever re-attested, so
+`AUDIT_INTEGRITY_CHECK`'s tamper-detection path was unreachable in
+production despite being fully implemented and tested. ADR-013 §6a now
+specifies exact integer arithmetic (a 900s window, a 300s tick, each
+window attested three times at +0/+20/+40 minutes after it closes,
+verified by direct simulation before being trusted) rather than the
+contradictory prose it replaced.
+
+Safety invariant #17 (`tests/safety/test_no_execution_path_in_worker.py`,
+`tests/safety/README.md`) and import-linter contract 5 (`atp_worker`
+forbidden from importing `atp_api`/`atp_exec_paper`, redundant with the
+layered contract by design, matching contract 3's precedent) close out
+Phase B's boundary-proving work. `docs/schemas/session.md`,
+`docs/schemas/job_queue.md`, `workers/pyproject.toml`'s description, and
+`workers/src/atp_worker/__init__.py`'s stale "Step 16" reference are
+corrected to match what ADR-013 actually authorizes - none of these were
+behavior changes.
+
+**Not yet done:** `tests/integration/db/test_worker_job_queue.py` is
+written (concurrent claim exclusivity, lease reclaim, duplicate-live-job
+rejection via the real repository, the narrow session-projection trap,
+one full claim-to-terminal-state lifecycle - all through the real
+`atp_worker` role) but, like every Docker-gated test in this repository,
+has not executed here: Docker is not installed in this environment. It
+will run for the first time in CI, the same way Phase A's 78 tests did.
+
 ## Next implementation step
 
-STEP 12 - not yet scoped in this document. Candidate (surfaced during the
-Step 10 reconciliation, still the strongest fully-unblocked runner-up):
-`atp_worker` (session reap / audit integrity check / retention jobs).
-Verified during Step 11's reconciliation that `atp_worker` genuinely holds
-`SELECT, INSERT, UPDATE, DELETE` on `core.job_queue`
-(`ops/sql/roles_and_schemas.sql.tmpl`, `0003_table_grants.py`) - unlike
-ADR-011's situation, a real `SELECT ... FOR UPDATE SKIP LOCKED` claim loop
-is possible there. Also verified: `SESSION_REAP` cannot reap as originally
-imagined - `0003_table_grants.py` revokes all writes on `core.sessions`
-from `atp_worker`, leaving only column-scoped `SELECT`; any session-reap
-job must be observe-only (count + audit event), with actual revocation
-happening lazily in `atp_api` at auth time, where the write grant already
-exists. Needs its own ADR (ADR-013, worker job execution model) before any
-code. Other candidates remain deliberately not started: a frontend scaffold
-(Node/npm not installed in this environment); a market-data/egress policy
-decision (blocked simultaneously by import-linter contract #4's no-egress
-rule, `Settings` refusing to start with any `KITE_*` var, and ADR-006's
+Not yet decided. Step 12 Phase B is feature-complete in the working tree
+but uncommitted - commit, push, and let CI run the Docker-gated worker
+suite for the first time before deciding what comes next. Other candidates
+remain deliberately not started: a frontend scaffold (Node/npm not
+installed in this environment); a market-data/egress policy decision
+(blocked simultaneously by import-linter contract #4's no-egress rule,
+`Settings` refusing to start with any `KITE_*` var, and ADR-006's
 unreviewed-MCP gate - starting it is a phase boundary needing its own ADR
 and explicit authorization, not something to slip into a step). Do not
 begin without an explicit instruction and a fresh read of CLAUDE.md and the
@@ -426,5 +493,9 @@ relevant ADRs/rules.
 
 Do not start live trading or broker integration.
 Do not reinterpret skipped Docker tests as passing.
-Do not reinterpret Step 11's harness fix as data-plane verification - the
-77 Docker-gated integration tests have still never executed here.
+Step 12 Phase A verified the pre-`atp_worker` data plane in CI (78 passed,
+0 skipped, `continue-on-error` removed) - that verification is real and
+does not need repeating for its own sake. It does **not** extend to
+`atp_worker`: `tests/integration/db/test_worker_job_queue.py` exists but,
+like every Docker-gated test authored in this environment, has not yet
+executed anywhere. Do not reinterpret its existence as its result.

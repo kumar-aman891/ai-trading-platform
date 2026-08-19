@@ -31,6 +31,14 @@ ACTION_SESSION_REVOKED = "SESSION_REVOKED"
 ACTION_AUTHORIZATION_DENIED = "AUTHORIZATION_DENIED"
 ACTION_BOOTSTRAP_ADMIN_CREATED = "BOOTSTRAP_ADMIN_CREATED"
 
+# Phase 1 Step 12 Phase B (ADR-013 Section 2, Section 9): atp_worker's
+# AUDIT_INTEGRITY_CHECK job type - window attestation, not hash chaining.
+# Deliberately no JOB_STARTED/SUCCEEDED/FAILED constants alongside these:
+# job lifecycle is operational state belonging in core.job_queue and in
+# logs/metrics (ADR-010), not in this immutable, un-prunable ledger.
+ACTION_AUDIT_INTEGRITY_ATTESTED = "AUDIT_INTEGRITY_ATTESTED"
+ACTION_AUDIT_INTEGRITY_VIOLATION_DETECTED = "AUDIT_INTEGRITY_VIOLATION_DETECTED"
+
 
 @dataclass(frozen=True, slots=True)
 class AuditEvent:

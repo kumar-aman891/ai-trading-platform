@@ -35,5 +35,13 @@ Two additional tests exist now as an early down payment on invariant #1:
 `test_no_live_execution_module_is_importable`.
 
 **Update (Phase 1 Step 11):** #3 and #8, the two gaps identified during the
-Step 10 reconciliation, are now both implemented (see rows above). Every
-row in this table is now `✅ implemented`.
+Step 10 reconciliation, are now both implemented (see rows above).
+
+**Update (Phase 1 Step 12 Phase B, ADR-013):** row #17 below is a
+repo-added invariant beyond the original 16-item approved plan, added for
+the same reason #14/#15/#16 each were - a new capability (`atp_worker`)
+introduced a boundary the original plan could not have named in advance.
+
+| 17 | `atp_worker` cannot reach an order execution path, and `HANDLER_REGISTRY` cannot drift from `core.job_queue`'s `job_type` CHECK allowlist | ✅ implemented (`test_no_execution_path_in_worker.py`, Phase 1 Step 12 Phase B, ADR-013 §13) — AST import scan proves `atp_worker` imports neither `atp_exec_paper` nor `atp_api` at all, and neither `atp_domain.intents`, `atp_domain.risk.engine`, nor `atp_persistence.models.paper` specifically; signature inspection over every public function `atp_worker` defines (found by walking the package, not a hand-maintained list) proves none accepts a raw symbol/quantity/price/side/order-type parameter; `set(HANDLER_REGISTRY)` is asserted equal, bidirectionally, to the `job_type` allowlist parsed out of `JobQueueRow.__table_args__`'s own CHECK constraint text |
+
+Every row in this table is now `✅ implemented`.

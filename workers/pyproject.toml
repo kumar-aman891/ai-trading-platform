@@ -1,7 +1,7 @@
 [project]
 name = "atp-worker"
 version = "0.1.0"
-description = "Durable job-table worker: session reaping, audit-chain integrity checks, retention. Holds no order-path DB privileges."
+description = "Durable job-table worker: expired-session observation, audit window-attestation checks, job-queue retention. Holds no order-path DB privileges."
 requires-python = ">=3.12"
 dependencies = [
     "atp-domain",

@@ -206,3 +206,9 @@ name = "No Phase 1 service or platform layer holds an outbound HTTP client (no e
 type = "forbidden"
 source_modules = ["atp_api", "atp_exec_paper", "atp_worker", "atp_platform"]
 forbidden_modules = ["httpx", "requests", "aiohttp"]
+
+[[tool.importlinter.contracts]]
+name = "atp_worker never reaches the API layer or the paper execution gateway"
+type = "forbidden"
+source_modules = ["atp_worker"]
+forbidden_modules = ["atp_api", "atp_exec_paper"]

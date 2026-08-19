@@ -87,23 +87,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Prefer the pytest FAILURES section (skips the docker image-pull
-          # noise that otherwise fills a byte-count tail and pushes the
-          # actual tracebacks out of the captured window) - fall back to a
-          # plain tail if pytest never got that far.
-          if grep -q "FAILURES" /tmp/integration.log; then
-            sed -n '/FAILURES/,$p' /tmp/integration.log > /tmp/integration_relevant.log
+          # pytest reports setup/teardown (fixture) failures in a separate
+          # "ERRORS" section, distinct from "FAILURES" (assertion/body
+          # failures) - both matter, but ERRORS is usually the smaller,
+          # more load-bearing one when a connection gets poisoned mid-run
+          # (the fixture error is the actual root cause; every FAILURES
+          # entry after it is downstream noise). Capture ERRORS in full
+          # (bounded to 30000 chars) plus the head of FAILURES (bounded to
+          # 25000 chars, since it can otherwise exceed GitHub's 65536-char
+          # issue body limit on its own) - together, comfortably under that
+          # limit.
+          if grep -q " ERRORS " /tmp/integration.log; then
+            ERRORS_SECTION=$(awk '/ ERRORS /{f=1} f; /short test summary info/{exit}' /tmp/integration.log | head -c 30000)
           else
-            cp /tmp/integration.log /tmp/integration_relevant.log
+            ERRORS_SECTION="(none)"
           fi
-          # GitHub issue bodies cap at 65536 chars, and the FAILURES section
-          # alone can exceed that - a plain tail keeps only the LAST
-          # failures (cascade noise), losing the first, real one. Keep the
-          # head (earliest, real failures) and the tail (short summary)
-          # instead, joined with a marker.
-          HEAD=$(head -c 45000 /tmp/integration_relevant.log 2>/dev/null || echo "")
-          TAIL_PART=$(tail -c 15000 /tmp/integration_relevant.log 2>/dev/null || echo "")
-          TAIL=$(printf '%s\n\n...[truncated middle]...\n\n%s' "$HEAD" "$TAIL_PART")
+          if grep -q "FAILURES" /tmp/integration.log; then
+            FAILURES_SECTION=$(sed -n '/FAILURES/,$p' /tmp/integration.log | head -c 25000)
+          else
+            FAILURES_SECTION="(none)"
+          fi
+          TAIL=$(printf '=== ERRORS (fixture/setup failures) ===\n%s\n\n=== FAILURES (head) ===\n%s' "$ERRORS_SECTION" "$FAILURES_SECTION")
           jq -n \
             --arg title "CI integration failure: run ${{ github.run_id }} (${{ github.sha }})" \
             --arg body "$(printf '```\n%s\n```\n' "$TAIL")" \

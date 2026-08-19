@@ -98,6 +98,34 @@ jobs:
           set -o pipefail
           make test-integration 2>&1 | tee /tmp/integration.log
 
+      # TEMPORARY (Phase 1 Step 12 Phase B): re-emit the failing pytest
+      # output as workflow *annotations*. GitHub's job-log API requires
+      # admin rights even on a public repository, but check-run
+      # annotations are readable anonymously - so this is what makes an
+      # integration failure diagnosable at all from outside the repo.
+      # Mirrors the "temporary failure-diagnostic capture" steps Phase A
+      # used and then removed; remove this one the same way once the
+      # worker integration suite is green.
+      - name: Surface integration failure as annotations (temporary diagnostic)
+        if: failure()
+        run: |
+          if [ ! -f /tmp/integration.log ]; then
+            echo "::error title=integration-diagnostic::/tmp/integration.log does not exist"
+            exit 0
+          fi
+          emit() {
+            title="$1"
+            body="$2"
+            [ -z "$body" ] && return 0
+            escaped=$(printf '%s' "$body" | sed 's/%/%25/g' | sed 's/\r//g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=${title}::${escaped}"
+          }
+          summary=$(sed -n '/short test summary info/,$p' /tmp/integration.log | head -c 4000)
+          emit "pytest-summary" "$summary"
+          errors=$(grep -nE "^E  |ERROR |Interrupted|error during collection|ModuleNotFoundError|ImportError" /tmp/integration.log | head -60 | head -c 4000)
+          emit "pytest-errors" "$errors"
+          emit "log-tail" "$(tail -60 /tmp/integration.log | head -c 4000)"
+
 
   secret-scan:
     name: Secret scan (gitleaks)

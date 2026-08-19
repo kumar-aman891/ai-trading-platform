@@ -44,7 +44,12 @@ def seeded_instrument_id(migrated_database: str, owner_connection: psycopg.Conne
         row = cur.fetchone()
     owner_connection.rollback()
     assert row is not None
-    return row[0]
+    # `str(...)`: psycopg3 maps a Postgres `uuid` column to a Python
+    # `UUID` object, but every domain identifier is `NewType("...", str)`
+    # and `uuid_pk` uses `as_uuid=False`, so SQLAlchemy hands the app a
+    # plain str. Returning the raw UUID made round-trip assertions compare
+    # UUID('...') against '...' and fail (Phase 1 Step 12 Phase A).
+    return str(row[0])
 
 
 @pytest.fixture

@@ -54,7 +54,10 @@ def _build_client(api_dsn: str) -> TestClient:
     engine = create_async_engine(_as_async_psycopg_url(api_dsn))
     session_factory = make_session_factory(engine)
     app = create_app(settings=settings, api_settings=ApiSettings(), session_factory=session_factory)
-    return TestClient(app, base_url="https://testserver")
+    # See test_auth_flows.py: Starlette's default client host
+    # ("testclient") is not a valid value for `core.sessions.ip_address`,
+    # a Postgres INET column - login fails with DataError -> 503.
+    return TestClient(app, base_url="https://testserver", client=("127.0.0.1", 50000))
 
 
 @pytest.fixture
@@ -64,7 +67,12 @@ def seeded_instrument_id(migrated_database: str, owner_connection: psycopg.Conne
         row = cur.fetchone()
     owner_connection.rollback()
     assert row is not None
-    return row[0]
+    # `str(...)`: psycopg3 maps a Postgres `uuid` column to a Python
+    # `UUID` object, but every domain identifier is `NewType("...", str)`
+    # and `uuid_pk` uses `as_uuid=False`, so SQLAlchemy hands the app a
+    # plain str. Returning the raw UUID made round-trip assertions compare
+    # UUID('...') against '...' and fail (Phase 1 Step 12 Phase A).
+    return str(row[0])
 
 
 @pytest.fixture

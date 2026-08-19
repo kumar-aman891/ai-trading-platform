@@ -175,6 +175,12 @@ _DELETE_USER_CASCADE_STATEMENTS = (
         SELECT proposal_id FROM paper.trade_proposals WHERE created_by = %s)
     """,
     "DELETE FROM paper.trade_proposals WHERE created_by = %s",
+    # core.risk_config.created_by also references core.users. Only rows
+    # this user authored are removed; the migration-seeded bootstrap
+    # config has `created_by IS NULL` and so is never matched. The
+    # `risk_config_immutable` trigger fires BEFORE UPDATE only, so DELETE
+    # is permitted here.
+    "DELETE FROM core.risk_config WHERE created_by = %s",
     "DELETE FROM core.sessions WHERE user_id = %s",
     "DELETE FROM core.users WHERE user_id = %s",
 )

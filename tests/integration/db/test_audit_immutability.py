@@ -9,9 +9,12 @@ from __future__ import annotations
 
 import os
 import uuid
+from collections.abc import Iterator
 
 import psycopg
 import pytest
+
+from tests.integration.db.conftest import delete_user_cascade
 
 
 def _new_uuid() -> str:
@@ -66,7 +69,18 @@ def test_audit_events_api_role_has_no_update_or_delete_grant(
 
 
 @pytest.fixture
-def seeded_user_id(owner_connection: psycopg.Connection) -> str:
+def seeded_user_id(owner_connection: psycopg.Connection) -> Iterator[str]:
+    """Yields, rather than returns, so the seeded row is actually removed.
+
+    This fixture used to `return`, leaking one `core.users` row (and, via
+    `seeded_risk_config_id`, one `core.risk_config` row) per test. Nothing
+    in this file noticed, but `core.users` is shared session state: this
+    module sorts before test_auth_flows.py, whose
+    `test_bootstrap_admin_creates_the_first_administrator` requires an
+    empty `core.users` and silently `pytest.skip`ped when it found one -
+    a test quietly not running because an unrelated file forgot to clean
+    up. Surfaced by the first real run against Postgres (Phase 1 Step 12
+    Phase A), where the CI gate requires zero skips."""
     user_id = _new_uuid()
     with owner_connection.cursor() as cur:
         cur.execute(
@@ -77,7 +91,10 @@ def seeded_user_id(owner_connection: psycopg.Connection) -> str:
             (user_id, f"fixture-{user_id}"),
         )
     owner_connection.commit()
-    return user_id
+    yield user_id
+    # Also removes `seeded_risk_config_id`'s row, which references this
+    # user via `core.risk_config.created_by`.
+    delete_user_cascade(owner_connection, user_id)
 
 
 @pytest.fixture

@@ -218,9 +218,18 @@ def test_bootstrap_admin_creates_the_first_administrator(
         cur.execute("SELECT count(*) FROM core.users")
         (existing,) = cur.fetchone()  # type: ignore[misc]
     if existing:
-        pytest.skip(
-            "core.users already has rows in this shared test database - "
-            "not this test's job to clear it"
+        # Deliberately a failure, not a `pytest.skip`. `bootstrap_admin`
+        # is only meaningful against an empty `core.users`, so a non-empty
+        # table means some earlier test leaked a row - and skipping on
+        # that is exactly the silent false pass Phase 1 Step 11's
+        # fail-closed gate exists to prevent. Naming the leftover
+        # usernames makes the culprit obvious.
+        with owner_connection.cursor() as cur:
+            cur.execute("SELECT username FROM core.users ORDER BY created_at LIMIT 10")
+            leftovers = [row[0] for row in cur.fetchall()]
+        pytest.fail(
+            f"core.users must be empty for this test but holds {existing} row(s) - "
+            f"an earlier test leaked them: {leftovers}"
         )
 
     engine = create_async_engine(_as_async_psycopg_url(owner_dsn))

@@ -60,10 +60,30 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # No uv/Python setup needed on the runner itself: `make test-integration`
-      # only shells out to `docker compose`, which builds and runs pytest
-      # *inside* ops/docker/Dockerfile.test's own image (its own `uv sync`
-      # happens in that container, not on this host).
+      # The main integration suite below needs no uv/Python on the runner -
+      # `make test-integration` only shells out to `docker compose`, which
+      # builds and runs pytest *inside* ops/docker/Dockerfile.test's own
+      # image. The host-side toolchain here exists solely for the lifecycle
+      # tests, which cannot run in that container.
+      #
+      # tests/integration/db/test_stack_lifecycle.py's two tests drive
+      # `docker compose` itself rather than connecting to an already-running
+      # stack, so they cannot run inside the `test-runner` container the step
+      # below starts: that container has no docker CLI, no docker socket, and
+      # sits on an `internal: true` network - and starting the stack from
+      # inside the stack is circular anyway. Run on the host, which does have
+      # docker, so they actually execute instead of contributing two
+      # permanent skips to a gate that requires zero.
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Set up Python
+        run: uv python install 3.12
+      - name: Sync workspace (dev group, all packages)
+        run: uv sync --all-packages --group dev --frozen
+      - name: Docker Compose lifecycle tests (host-side; need the docker CLI)
+        env:
+          RUN_DOCKER_LIFECYCLE_TESTS: "1"
+        run: uv run pytest tests/integration/db/test_stack_lifecycle.py -v
 
       # Phase 1 Step 12 Phase A iteration (step12-phase-a-verify branch only):
       # continue-on-error deliberately dropped here so a genuine failure
@@ -111,9 +131,11 @@ jobs:
           else
             FAILURES_SECTION="(none)"
           fi
+          SKIPPED=$(grep -E '^SKIPPED' /tmp/integration.log | head -c 4000)
+          [ -n "$SKIPPED" ] || SKIPPED="(none)"
           COUNTS=$(grep -E '^=+ .*(passed|failed|error|skipped).* =+$' /tmp/integration.log | tail -5)
           COLLECTED=$(grep -E '^collected [0-9]+ item' /tmp/integration.log | tail -2)
-          TAIL=$(printf '=== COLLECTED ===\n%s\n\n=== COUNTS ===\n%s\n\n=== ERRORS (fixture/setup failures) ===\n%s\n\n=== FAILURES (head) ===\n%s' "$COLLECTED" "$COUNTS" "$ERRORS_SECTION" "$FAILURES_SECTION")
+          TAIL=$(printf '=== COLLECTED ===\n%s\n\n=== COUNTS ===\n%s\n\n=== SKIPPED ===\n%s\n\n=== ERRORS (fixture/setup failures) ===\n%s\n\n=== FAILURES (head) ===\n%s' "$COLLECTED" "$COUNTS" "$SKIPPED" "$ERRORS_SECTION" "$FAILURES_SECTION")
           jq -n \
             --arg title "CI integration ${{ job.status }}: run ${{ github.run_id }} (${{ github.sha }})" \
             --arg body "$(printf '```\n%s\n```\n' "$TAIL")" \

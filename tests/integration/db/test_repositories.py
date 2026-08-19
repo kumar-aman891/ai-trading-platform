@@ -294,7 +294,11 @@ async def _mint_fixture_intent(
             ),
             {
                 "id": risk_config_id,
-                "version": int.from_bytes(uuid.uuid4().bytes[:4], "big"),
+                # Three bytes, not four: `version` is a Postgres `integer`
+                # (max 2147483647) and four random bytes reach 4294967295,
+                # overflowing on roughly half of all draws (Phase 1 Step 12
+                # Phase A).
+                "version": int.from_bytes(uuid.uuid4().bytes[:3], "big"),
                 "hash": _new_uuid(),
                 "user_id": user_id,
             },

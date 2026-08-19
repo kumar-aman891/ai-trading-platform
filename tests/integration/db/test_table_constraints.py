@@ -27,8 +27,15 @@ def _new_uuid() -> str:
 
 def _random_version() -> int:
     """A version number vanishingly unlikely to collide with another test
-    in the same run - `core.risk_config` has `UNIQUE (mode, version)`."""
-    return int.from_bytes(os.urandom(4), "big")
+    in the same run - `core.risk_config` has `UNIQUE (mode, version)`.
+
+    Three bytes, not four: `core.risk_config.version` is a Postgres
+    `integer` (max 2147483647) and `os.urandom(4)` reaches 4294967295, so
+    roughly half of all draws raised `NumericValueOutOfRange`. Surfaced by
+    the first real run against Postgres (Phase 1 Step 12 Phase A) - see
+    the same fix in test_audit_immutability.py and test_repositories.py.
+    16777216 values is still far more than enough for one test session."""
+    return int.from_bytes(os.urandom(3), "big")
 
 
 @pytest.fixture

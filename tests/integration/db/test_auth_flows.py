@@ -31,6 +31,7 @@ from atp_domain.clock import UTCClock
 from atp_domain.ids import UUIDv7Generator
 from atp_persistence.db import make_session_factory, unit_of_work
 from atp_platform.config import Settings
+from tests.integration.db.conftest import delete_user_cascade
 
 
 def _new_uuid() -> str:
@@ -81,13 +82,6 @@ def _insert_user(
     return user_id
 
 
-def _delete_user_cascade(owner_connection: psycopg.Connection, user_id: str) -> None:
-    with owner_connection.cursor() as cur:
-        cur.execute("DELETE FROM core.sessions WHERE user_id = %s", (user_id,))
-        cur.execute("DELETE FROM core.users WHERE user_id = %s", (user_id,))
-    owner_connection.commit()
-
-
 def test_login_then_me_then_logout_round_trips_through_real_tables(
     migrated_database: str, owner_dsn: str, owner_connection: psycopg.Connection
 ) -> None:
@@ -119,7 +113,7 @@ def test_login_then_me_then_logout_round_trips_through_real_tables(
         after_logout = client.get("/api/v1/auth/me")
         assert after_logout.status_code == 401
     finally:
-        _delete_user_cascade(owner_connection, user_id)
+        delete_user_cascade(owner_connection, user_id)
 
 
 def _get_username(owner_connection: psycopg.Connection, user_id: str) -> str:
@@ -163,7 +157,7 @@ def test_a_session_already_expired_in_the_database_is_rejected(
         assert response.status_code == 401
         assert response.json()["code"] == "SESSION_EXPIRED"
     finally:
-        _delete_user_cascade(owner_connection, user_id)
+        delete_user_cascade(owner_connection, user_id)
 
 
 def test_administrator_role_reaches_kill_switches_and_audit_against_a_real_database(
@@ -188,7 +182,7 @@ def test_administrator_role_reaches_kill_switches_and_audit_against_a_real_datab
         assert client.get("/api/v1/kill-switches").status_code == 200
         assert client.get("/api/v1/audit/events").status_code == 200
     finally:
-        _delete_user_cascade(owner_connection, user_id)
+        delete_user_cascade(owner_connection, user_id)
 
 
 def test_viewer_role_is_forbidden_from_kill_switches_against_a_real_database(
@@ -214,7 +208,7 @@ def test_viewer_role_is_forbidden_from_kill_switches_against_a_real_database(
         assert response.status_code == 403
         assert response.json()["code"] == "FORBIDDEN"
     finally:
-        _delete_user_cascade(owner_connection, user_id)
+        delete_user_cascade(owner_connection, user_id)
 
 
 def test_bootstrap_admin_creates_the_first_administrator(
@@ -256,4 +250,4 @@ def test_bootstrap_admin_creates_the_first_administrator(
         assert must_change_password is True
     finally:
         asyncio.run(engine.dispose())
-        _delete_user_cascade(owner_connection, user_id)
+        delete_user_cascade(owner_connection, user_id)

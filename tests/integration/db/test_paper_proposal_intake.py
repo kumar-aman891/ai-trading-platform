@@ -33,6 +33,7 @@ from atp_exec_paper.gateway import run_once
 from atp_persistence.db import make_session_factory, read_only_session, unit_of_work
 from atp_persistence.repositories import SqlAlchemyInstrumentRepository
 from atp_platform.config import Settings
+from tests.integration.db.conftest import delete_user_cascade
 
 
 def _new_uuid() -> str:
@@ -92,11 +93,12 @@ def seeded_trader(migrated_database: str, owner_connection: psycopg.Connection):
         )
     owner_connection.commit()
     yield user_id, username, password
-    with owner_connection.cursor() as cur:
-        cur.execute("DELETE FROM paper.trade_proposals WHERE created_by = %s", (user_id,))
-        cur.execute("DELETE FROM core.sessions WHERE user_id = %s", (user_id,))
-        cur.execute("DELETE FROM core.users WHERE user_id = %s", (user_id,))
-    owner_connection.commit()
+    # The shared FK-ordered helper, not a local DELETE pair: this fixture's
+    # tests run the full intake -> risk-decision -> order path, so a
+    # proposal is referenced by `paper.risk_decisions` by the time teardown
+    # runs and a direct `DELETE FROM paper.trade_proposals` raises
+    # `ForeignKeyViolation` (Phase 1 Step 12 Phase A).
+    delete_user_cascade(owner_connection, user_id)
 
 
 def _login(client: TestClient, *, username: str, password: str) -> None:
@@ -141,7 +143,12 @@ def test_submit_proposal_round_trips_through_the_real_atp_api_role(
     owner_connection.rollback()
     assert row is not None
     assert row[0] == "PAPER"
-    assert row[1] == user_id
+    # `str(...)`: read through raw psycopg (not the ORM), a Postgres
+    # `uuid` column comes back as a Python `UUID` object, while `user_id`
+    # is the plain `str` every domain identifier uses. The ORM path is
+    # unaffected - `uuid_pk`/`uuid_column` set `as_uuid=False` - so this is
+    # a raw-SQL test-side normalization, not a repository behavior change.
+    assert str(row[1]) == user_id
 
 
 def test_duplicate_client_request_id_under_genuine_concurrency_creates_exactly_one_proposal(

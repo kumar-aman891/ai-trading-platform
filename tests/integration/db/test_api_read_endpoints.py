@@ -30,6 +30,7 @@ from atp_api.security.passwords import hash_password
 from atp_api.security.rbac import ROLE_ADMINISTRATOR
 from atp_persistence.db import make_session_factory
 from atp_platform.config import Settings
+from tests.integration.db.conftest import delete_user_cascade
 
 
 def _new_uuid() -> str:
@@ -80,13 +81,6 @@ def _insert_admin_user(
     return user_id
 
 
-def _delete_user_cascade(owner_connection: psycopg.Connection, user_id: str) -> None:
-    with owner_connection.cursor() as cur:
-        cur.execute("DELETE FROM core.sessions WHERE user_id = %s", (user_id,))
-        cur.execute("DELETE FROM core.users WHERE user_id = %s", (user_id,))
-    owner_connection.commit()
-
-
 @pytest.fixture
 def authenticated_client(
     owner_dsn: str, owner_connection: psycopg.Connection
@@ -106,7 +100,7 @@ def authenticated_client(
         assert login.status_code == 200, login.text
         yield client
     finally:
-        _delete_user_cascade(owner_connection, user_id)
+        delete_user_cascade(owner_connection, user_id)
 
 
 def test_readyz_reports_ok_against_a_reachable_database(

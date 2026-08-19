@@ -17,6 +17,8 @@ from collections.abc import Iterator
 import psycopg
 import pytest
 
+from tests.integration.db.conftest import delete_user_cascade
+
 
 def _new_uuid() -> str:
     return str(uuid.uuid4())
@@ -73,9 +75,11 @@ def seeded_user_id(owner_connection: psycopg.Connection) -> Iterator[str]:
         )
     owner_connection.commit()
     yield user_id
-    with owner_connection.cursor() as cur:
-        cur.execute("DELETE FROM core.users WHERE user_id = %s", (user_id,))
-    owner_connection.commit()
+    # The shared FK-ordered helper: `core.risk_config.created_by`
+    # references `core.users`, and the tests below deliberately create
+    # such a row, so a bare `DELETE FROM core.users` raises
+    # `ForeignKeyViolation` (Phase 1 Step 12 Phase A).
+    delete_user_cascade(owner_connection, user_id)
 
 
 def test_application_created_config_can_carry_a_non_null_creator(
@@ -102,7 +106,10 @@ def test_application_created_config_can_carry_a_non_null_creator(
             "SELECT created_by FROM core.risk_config WHERE risk_config_id = %s", (risk_config_id,)
         )
         (created_by,) = cur.fetchone()  # type: ignore[misc]
-    assert created_by == seeded_user_id
+    # `str(...)`: raw psycopg maps a Postgres `uuid` column to a Python
+    # `UUID` object; see the same normalization in
+    # test_paper_proposal_intake.py.
+    assert str(created_by) == seeded_user_id
 
     with owner_connection.cursor() as cur:
         cur.execute("DELETE FROM core.risk_config WHERE risk_config_id = %s", (risk_config_id,))

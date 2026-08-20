@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from atp_persistence.repositories.audit_writer import SqlAlchemyAuditEventWriter
+from atp_persistence.repositories.kill_switches import SqlAlchemyKillSwitchStateRepository
 from atp_persistence.repositories.orders import SqlAlchemyOrderRepository
 from atp_persistence.repositories.risk_decisions import SqlAlchemyRiskDecisionRepository
 from atp_persistence.repositories.sessions import SqlAlchemySessionRepository
@@ -53,6 +54,7 @@ class UnitOfWork:
         self.orders = SqlAlchemyOrderRepository(session)
         self.users = SqlAlchemyUserRepository(session)
         self.sessions = SqlAlchemySessionRepository(session)
+        self.kill_switches = SqlAlchemyKillSwitchStateRepository(session)
         self.audit = SqlAlchemyAuditEventWriter(session)
 
     async def commit(self) -> None:

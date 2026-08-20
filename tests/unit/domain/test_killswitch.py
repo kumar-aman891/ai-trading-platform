@@ -7,6 +7,7 @@ import pytest
 
 from atp_domain.errors import InvalidSwitchIdError
 from atp_domain.killswitch import (
+    MUTABLE_SWITCH_SCOPES,
     SwitchId,
     SwitchScope,
     SwitchState,
@@ -89,3 +90,71 @@ def test_unavailable_state_fails_closed_end_to_end() -> None:
     full resolve -> is_blocking path."""
     switch_id = SwitchId(SwitchScope.INSTRUMENT, qualifier="NSE:INFY")
     assert is_blocking(resolve_switch_state(switch_id, {})) is True
+
+
+# --- SwitchId.parse (Phase 1 Step 14, ADR-007) ---------------------------
+
+
+@pytest.mark.parametrize(
+    "scope",
+    [
+        SwitchScope.GLOBAL_LIVE,
+        SwitchScope.LIVE_ACCOUNT,
+        SwitchScope.PAPER,
+        SwitchScope.API_EXECUTION,
+    ],
+)
+def test_parse_round_trips_unqualified_scopes(scope: SwitchScope) -> None:
+    switch_id = SwitchId.parse(scope.value)
+    assert switch_id == SwitchId(scope)
+    assert str(switch_id) == scope.value
+
+
+@pytest.mark.parametrize("scope", [SwitchScope.STRATEGY, SwitchScope.INSTRUMENT])
+def test_parse_round_trips_qualified_scopes(scope: SwitchScope) -> None:
+    raw = f"{scope.value}:momentum-v1"
+    switch_id = SwitchId.parse(raw)
+    assert switch_id == SwitchId(scope, qualifier="momentum-v1")
+    assert str(switch_id) == raw
+
+
+def test_parse_keeps_everything_after_the_first_colon_as_the_qualifier() -> None:
+    """`__str__` never escapes a colon inside a qualifier - `parse` must
+    be its exact inverse, so a qualifier containing one still round-trips."""
+    switch_id = SwitchId.parse("INSTRUMENT:NSE:INFY")
+    assert switch_id.qualifier == "NSE:INFY"
+    assert str(switch_id) == "INSTRUMENT:NSE:INFY"
+
+
+def test_parse_rejects_an_unknown_scope() -> None:
+    with pytest.raises(InvalidSwitchIdError, match="not a known switch scope"):
+        SwitchId.parse("NOT_A_REAL_SCOPE")
+
+
+def test_parse_rejects_an_unqualified_scope_given_a_qualifier() -> None:
+    """`parse` delegates to `__post_init__` for shape validation - it does
+    not duplicate the qualifier-presence rule itself."""
+    with pytest.raises(InvalidSwitchIdError, match="must not carry a qualifier"):
+        SwitchId.parse("PAPER:anything")
+
+
+def test_parse_rejects_a_qualified_scope_given_no_qualifier() -> None:
+    with pytest.raises(InvalidSwitchIdError, match="requires a qualifier"):
+        SwitchId.parse("STRATEGY")
+
+
+# --- MUTABLE_SWITCH_SCOPES (ADR-007's "Clearable in Phase 1" column) ----
+
+
+def test_mutable_switch_scopes_excludes_global_live_and_live_account() -> None:
+    assert SwitchScope.GLOBAL_LIVE not in MUTABLE_SWITCH_SCOPES
+    assert SwitchScope.LIVE_ACCOUNT not in MUTABLE_SWITCH_SCOPES
+
+
+def test_mutable_switch_scopes_includes_exactly_the_four_clearable_scopes() -> None:
+    assert {
+        SwitchScope.PAPER,
+        SwitchScope.STRATEGY,
+        SwitchScope.INSTRUMENT,
+        SwitchScope.API_EXECUTION,
+    } == MUTABLE_SWITCH_SCOPES

@@ -28,6 +28,16 @@ class SwitchScope(StrEnum):
 
 _QUALIFIED_SCOPES = frozenset({SwitchScope.STRATEGY, SwitchScope.INSTRUMENT})
 
+#: ADR-007's "Clearable in Phase 1" column, as code: `GLOBAL_LIVE` and
+#: `LIVE_ACCOUNT` are both "No - no route exists to clear it" and must stay
+#: that way - no route, no permission, and no repository write path in this
+#: codebase may ever act on either while relying on this constant to decide
+#: what is mutable. The single source of truth for "is this scope
+#: administratively clearable" lives here, not duplicated at the API layer.
+MUTABLE_SWITCH_SCOPES: frozenset[SwitchScope] = frozenset(
+    {SwitchScope.PAPER, SwitchScope.STRATEGY, SwitchScope.INSTRUMENT, SwitchScope.API_EXECUTION}
+)
+
 
 class SwitchState(StrEnum):
     ENGAGED = "ENGAGED"
@@ -55,6 +65,23 @@ class SwitchId:
 
     def __str__(self) -> str:
         return f"{self.scope.value}:{self.qualifier}" if self.qualifier else self.scope.value
+
+    @classmethod
+    def parse(cls, raw: str) -> SwitchId:
+        """The exact inverse of `__str__`: `"PAPER"` -> `SwitchId(PAPER)`,
+        `"STRATEGY:abc"` -> `SwitchId(STRATEGY, "abc")`. Splits on the
+        first `:` only (`partition`, not `split`), so a qualifier
+        containing its own `:` round-trips - matching `__str__`, which
+        never escapes one. An unrecognized scope raises
+        `InvalidSwitchIdError` (not `ValueError`, so every switch-ID
+        failure - unknown scope or bad qualifier shape - is the same
+        exception type, mapped by `atp_api.errors` the same way)."""
+        scope_part, _sep, qualifier_part = raw.partition(":")
+        try:
+            scope = SwitchScope(scope_part)
+        except ValueError as exc:
+            raise InvalidSwitchIdError(f"{scope_part!r} is not a known switch scope.") from exc
+        return cls(scope=scope, qualifier=qualifier_part or None)
 
 
 def resolve_switch_state(

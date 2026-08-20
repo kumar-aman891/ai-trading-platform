@@ -107,14 +107,20 @@ _ALLOWED_MUTATING_ROUTES = {
     "/api/v1/auth/login",
     "/api/v1/auth/logout",
     "/api/v1/paper/proposals",
+    "/api/v1/kill-switches/{switch_id}/engage",
+    "/api/v1/kill-switches/{switch_id}/disengage",
 }
 
 
 def test_only_get_head_and_the_sanctioned_post_routes_exist(settings: Settings) -> None:
     """No PUT/PATCH/DELETE route exists anywhere, and the only POST routes
-    are the two Step 8 authentication ones plus Step 10's PAPER proposal
-    intake - nothing in this app can create or execute an Order (intake
-    records a TradeProposal only, ADR-012)."""
+    are the two Step 8 authentication ones, Step 10's PAPER proposal
+    intake, and Step 14's kill-switch engage/disengage - nothing in this
+    app can create or execute an Order (intake records a TradeProposal
+    only, ADR-012), and the two kill-switch routes accept a `switch_id`
+    for only four of the six ADR-007 scopes, never `GLOBAL_LIVE`/
+    `LIVE_ACCOUNT` (`test_kill_switches.py`,
+    `tests/safety/test_kill_switch_mutation_boundary.py`)."""
     app = create_app(settings=settings)
     for route in app.routes:
         methods = getattr(route, "methods", None)

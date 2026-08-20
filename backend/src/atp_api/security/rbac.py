@@ -100,6 +100,8 @@ class Permission(StrEnum):
     READ_INSTRUMENTS = "READ_INSTRUMENTS"
     SUBMIT_PAPER_PROPOSAL = "SUBMIT_PAPER_PROPOSAL"
     READ_PAPER_LEDGER = "READ_PAPER_LEDGER"
+    ENGAGE_KILL_SWITCH = "ENGAGE_KILL_SWITCH"
+    DISENGAGE_KILL_SWITCH = "DISENGAGE_KILL_SWITCH"
     MANAGE_USERS = "MANAGE_USERS"
     MANAGE_SECURITY = "MANAGE_SECURITY"
 
@@ -121,19 +123,39 @@ _PAPER_TRADING_PERMISSIONS: frozenset[Permission] = frozenset(
     }
 )
 
+# ADR-007's deliberate engage/disengage asymmetry ("stopping is cheaper
+# than starting"), expressed as two separate permissions rather than one -
+# a single WRITE_KILL_SWITCH-shaped permission cannot express "paper_trader
+# may engage but not disengage" through this module's flat
+# permission-in-role-set model (`has_permission`), so the asymmetry has to
+# be two grants, not one grant plus an inline role check (which the module
+# docstring's "no `if role ==` anywhere" rule forbids). Kept as its own
+# named frozenset, reused as the same object by `paper_trader`/
+# `live_trader`/`administrator` below - the same anti-drift pattern
+# `_PAPER_TRADING_PERMISSIONS` already uses - rather than added directly
+# into `_PAPER_TRADING_PERMISSIONS` itself, whose own docstring precisely
+# scopes it to "submit a PAPER proposal and read the PAPER ledger" and
+# would otherwise go stale.
+_KILL_SWITCH_ENGAGE_PERMISSIONS: frozenset[Permission] = frozenset({Permission.ENGAGE_KILL_SWITCH})
+
 # `ROLE_LIVE_TRADER` is deliberately the *same object* as
 # `ROLE_PAPER_TRADER`'s permission set below, not merely an equal-by-value
 # copy - live_trader has no Phase 1 capability beyond what paper_trader
 # already has, because no live route or live execution service exists yet
-# for any permission to authorize.
+# for any permission to authorize. `_PAPER_TRADER_PERMISSIONS` is computed
+# once, here, and reused as that same object by both role rows below -
+# same reasoning as `_PAPER_TRADING_PERMISSIONS` itself, one level up.
+_PAPER_TRADER_PERMISSIONS: frozenset[Permission] = (
+    _READ_ONLY_OBSERVER_PERMISSIONS | _PAPER_TRADING_PERMISSIONS | _KILL_SWITCH_ENGAGE_PERMISSIONS
+)
+
 ROLE_PERMISSIONS: dict[str, frozenset[Permission]] = {
     ROLE_VIEWER: frozenset({Permission.READ_SYSTEM}),
     ROLE_RESEARCHER: _READ_ONLY_OBSERVER_PERMISSIONS | {Permission.READ_INSTRUMENTS},
-    ROLE_PAPER_TRADER: _READ_ONLY_OBSERVER_PERMISSIONS | _PAPER_TRADING_PERMISSIONS,
-    ROLE_LIVE_TRADER: _READ_ONLY_OBSERVER_PERMISSIONS | _PAPER_TRADING_PERMISSIONS,
-    ROLE_ADMINISTRATOR: _READ_ONLY_OBSERVER_PERMISSIONS
-    | _PAPER_TRADING_PERMISSIONS
-    | {Permission.MANAGE_USERS, Permission.MANAGE_SECURITY},
+    ROLE_PAPER_TRADER: _PAPER_TRADER_PERMISSIONS,
+    ROLE_LIVE_TRADER: _PAPER_TRADER_PERMISSIONS,
+    ROLE_ADMINISTRATOR: _PAPER_TRADER_PERMISSIONS
+    | {Permission.DISENGAGE_KILL_SWITCH, Permission.MANAGE_USERS, Permission.MANAGE_SECURITY},
 }
 
 

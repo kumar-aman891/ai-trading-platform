@@ -27,7 +27,7 @@ from atp_domain.orders import Fill, Order, Position
 from atp_domain.proposals import TradeProposal
 from atp_domain.risk.engine import RiskDecision
 from atp_domain.types import Mode, OrderId, ProposalId
-from atp_persistence.repositories import SessionRecord, UserRecord
+from atp_persistence.repositories import KillSwitchStateSnapshot, SessionRecord, UserRecord
 
 
 class FakeUserRepository:
@@ -130,6 +130,81 @@ class FakeAuditEventWriter:
 
     async def save(self, event: AuditEvent) -> None:
         self.events.append(event)
+
+
+@dataclass(frozen=True, slots=True)
+class FakeKillSwitchHistoryEntry:
+    """Duck-typed to `core.kill_switch_history`'s columns - what
+    `FakeKillSwitchStateRepository.apply_transition` records, for a test
+    to assert the append-only history behavior without a database."""
+
+    history_id: str
+    switch_id: str
+    previous_engaged: bool
+    new_engaged: bool
+    changed_at: datetime
+    changed_by: str | None
+    reason: str
+    audit_event_id: str
+
+
+class FakeKillSwitchStateRepository:
+    """Duck-typed to `SqlAlchemyKillSwitchStateRepository`. `apply_transition`
+    never removes or edits a `FakeKillSwitchHistoryEntry` once appended -
+    mirroring the real table's append-only trigger structurally, not just
+    by convention, the same way `tests/unit/worker/fakes.py`'s fakes make
+    an invariant true by construction rather than by a test remembering to
+    check it."""
+
+    def __init__(self, states: dict[str, KillSwitchStateSnapshot] | None = None) -> None:
+        self._states: dict[str, KillSwitchStateSnapshot] = dict(states or {})
+        self.history: list[FakeKillSwitchHistoryEntry] = []
+        self.get_current_calls: list[str] = []
+        self.apply_transition_calls: list[str] = []
+
+    async def list_all(self) -> Sequence[KillSwitchStateSnapshot]:
+        return sorted(self._states.values(), key=lambda snapshot: snapshot.switch_id)
+
+    async def get_current(self, switch_id: str) -> KillSwitchStateSnapshot | None:
+        self.get_current_calls.append(switch_id)
+        return self._states.get(switch_id)
+
+    async def apply_transition(
+        self,
+        switch_id: str,
+        *,
+        new_engaged: bool,
+        changed_by: str,
+        reason: str,
+        now: datetime,
+        history_id: str,
+        audit_event_id: str,
+    ) -> KillSwitchStateSnapshot:
+        self.apply_transition_calls.append(switch_id)
+        previous = self._states.get(switch_id)
+        previous_engaged = False if previous is None else previous.engaged
+
+        new_state = KillSwitchStateSnapshot(
+            switch_id=switch_id,
+            engaged=new_engaged,
+            updated_at=now,
+            updated_by=changed_by,
+            reason=reason,
+        )
+        self._states[switch_id] = new_state
+        self.history.append(
+            FakeKillSwitchHistoryEntry(
+                history_id=history_id,
+                switch_id=switch_id,
+                previous_engaged=previous_engaged,
+                new_engaged=new_engaged,
+                changed_at=now,
+                changed_by=changed_by,
+                reason=reason,
+                audit_event_id=audit_event_id,
+            )
+        )
+        return new_state
 
 
 class FakeTradeProposalRepository:
@@ -254,6 +329,9 @@ class FakeUnitOfWork:
     sessions: FakeSessionRepository = field(default_factory=FakeSessionRepository)
     trade_proposals: FakeTradeProposalRepository = field(
         default_factory=FakeTradeProposalRepository
+    )
+    kill_switches: FakeKillSwitchStateRepository = field(
+        default_factory=FakeKillSwitchStateRepository
     )
     audit: FakeAuditEventWriter = field(default_factory=FakeAuditEventWriter)
     committed: bool = False

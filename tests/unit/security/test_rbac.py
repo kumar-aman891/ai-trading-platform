@@ -91,3 +91,40 @@ def test_no_role_grants_every_permission_except_administrator() -> None:
     all_permissions = set(Permission)
     for role in non_admin_roles:
         assert ROLE_PERMISSIONS[role] != all_permissions
+
+
+# --- kill-switch engage/disengage asymmetry (Phase 1 Step 14, ADR-007) --
+
+
+@pytest.mark.parametrize("role", [ROLE_PAPER_TRADER, ROLE_LIVE_TRADER, ROLE_ADMINISTRATOR])
+def test_engage_kill_switch_is_granted_to_every_trading_capable_role_and_administrator(
+    role: str,
+) -> None:
+    assert has_permission(role, Permission.ENGAGE_KILL_SWITCH) is True
+
+
+@pytest.mark.parametrize("role", [ROLE_VIEWER, ROLE_RESEARCHER])
+def test_engage_kill_switch_is_not_granted_below_paper_trader(role: str) -> None:
+    assert has_permission(role, Permission.ENGAGE_KILL_SWITCH) is False
+
+
+@pytest.mark.parametrize(
+    "role", [ROLE_VIEWER, ROLE_RESEARCHER, ROLE_PAPER_TRADER, ROLE_LIVE_TRADER]
+)
+def test_disengage_kill_switch_is_granted_to_administrator_only(role: str) -> None:
+    """ADR-007's deliberate asymmetry: every role below `administrator` -
+    including `paper_trader`/`live_trader`, which can engage - must not be
+    able to disengage. 'Stopping is cheaper than starting.'"""
+    assert has_permission(role, Permission.DISENGAGE_KILL_SWITCH) is False
+
+
+def test_administrator_can_both_engage_and_disengage_kill_switches() -> None:
+    assert has_permission(ROLE_ADMINISTRATOR, Permission.ENGAGE_KILL_SWITCH) is True
+    assert has_permission(ROLE_ADMINISTRATOR, Permission.DISENGAGE_KILL_SWITCH) is True
+
+
+def test_paper_trader_can_engage_but_not_disengage() -> None:
+    """The exact scenario ADR-007 names: `paper_trader` may engage a kill
+    switch but may not clear one."""
+    assert has_permission(ROLE_PAPER_TRADER, Permission.ENGAGE_KILL_SWITCH) is True
+    assert has_permission(ROLE_PAPER_TRADER, Permission.DISENGAGE_KILL_SWITCH) is False

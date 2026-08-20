@@ -24,7 +24,11 @@ OPENAPI_TAGS: list[dict[str, str]] = [
     {"name": "system", "description": "Safe, read-only system metadata. No secrets or topology."},
     {
         "name": "kill-switches",
-        "description": "Read-only kill-switch state. No mutation route exists yet.",
+        "description": (
+            "Kill-switch state and administration. Engage/disengage exist only for "
+            "PAPER, STRATEGY:{id}, INSTRUMENT:{id}, and API_EXECUTION - GLOBAL_LIVE and "
+            "LIVE_ACCOUNT have no mutation route in Phase 1 (ADR-007)."
+        ),
     },
     {
         "name": "audit",

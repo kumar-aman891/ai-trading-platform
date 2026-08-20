@@ -73,13 +73,20 @@ _ALLOWED_MUTATING_ROUTES: dict[str, frozenset[str]] = {
     "/api/v1/auth/login": frozenset({"POST"}),
     "/api/v1/auth/logout": frozenset({"POST"}),
     "/api/v1/paper/proposals": frozenset({"POST"}),
+    "/api/v1/kill-switches/{switch_id}/engage": frozenset({"POST"}),
+    "/api/v1/kill-switches/{switch_id}/disengage": frozenset({"POST"}),
 }
 
 
 def test_built_app_exposes_no_unexpected_mutating_route() -> None:
     """Every route in the fully-wired app is GET/HEAD/OPTIONS only, except
-    the explicitly allow-listed Step 8 auth routes above - proven against
-    the actual built `FastAPI` instance, not by reading source."""
+    the explicitly allow-listed Step 8 auth routes, Step 10's PAPER
+    proposal intake, and Step 14's kill-switch engage/disengage above -
+    proven against the actual built `FastAPI` instance, not by reading
+    source. See `test_kill_switch_mutation_boundary.py` for the mechanical
+    proof that the two kill-switch routes still reject `GLOBAL_LIVE`/
+    `LIVE_ACCOUNT` specifically, which this allow-list (by path only, not
+    by which `switch_id` a path parameter accepts) cannot express."""
     from atp_api.app import create_app
     from atp_platform.config import Settings
 

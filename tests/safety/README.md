@@ -44,4 +44,11 @@ introduced a boundary the original plan could not have named in advance.
 
 | 17 | `atp_worker` cannot reach an order execution path, and `HANDLER_REGISTRY` cannot drift from `core.job_queue`'s `job_type` CHECK allowlist | ✅ implemented (`test_no_execution_path_in_worker.py`, Phase 1 Step 12 Phase B, ADR-013 §13) — AST import scan proves `atp_worker` imports neither `atp_exec_paper` nor `atp_api` at all, and neither `atp_domain.intents`, `atp_domain.risk.engine`, nor `atp_persistence.models.paper` specifically; signature inspection over every public function `atp_worker` defines (found by walking the package, not a hand-maintained list) proves none accepts a raw symbol/quantity/price/side/order-type parameter; `set(HANDLER_REGISTRY)` is asserted equal, bidirectionally, to the `job_type` allowlist parsed out of `JobQueueRow.__table_args__`'s own CHECK constraint text |
 
+**Update (Phase 1 Step 14, ADR-007):** row #18 below is a repo-added
+invariant, added for the same reason #14/#15/#16/#17 each were — a new
+capability (kill-switch engage/disengage) introduced a boundary the
+original plan could not have named in advance.
+
+| 18 | `GLOBAL_LIVE`/`LIVE_ACCOUNT` have no mutation route in Phase 1 | ✅ implemented (`test_kill_switch_mutation_boundary.py`, Phase 1 Step 14, ADR-007) — structural: `atp_domain.killswitch.MUTABLE_SWITCH_SCOPES`, the single source of truth `atp_api.services.kill_switches` consults before any write, excludes both scopes by construction; behavioral: a real HTTP request through the fully-wired app, as `administrator` (the strongest role, holding both `ENGAGE_KILL_SWITCH` and `DISENGAGE_KILL_SWITCH`), against both switches and both verbs, is rejected 403 — also asserted in `tests/unit/api/test_routing.py`'s and `tests/safety/test_no_execution_path_in_api.py`'s existing sanctioned-mutating-route allow-lists, extended to the two new routes by path only (which cannot itself express the per-`switch_id` rejection this row proves) |
+
 Every row in this table is now `✅ implemented`.

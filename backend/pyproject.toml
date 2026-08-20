@@ -13,6 +13,12 @@ dependencies = [
     # docs/schemas/user.md). No other hashing library is used anywhere in
     # this codebase.
     "argon2-cffi>=23.1,<24",
+    # Phase 1 Step 15: RedisRateLimiter (atp_api.middleware.rate_limit) -
+    # the distributed rate limiter used by the real deployed process
+    # (atp_api.main). Same floor as the root workspace's existing
+    # test-only dependency (Step 5) - this adds it as a real runtime
+    # dependency of atp_api specifically.
+    "redis>=5.0",
 ]
 
 [tool.uv.sources]

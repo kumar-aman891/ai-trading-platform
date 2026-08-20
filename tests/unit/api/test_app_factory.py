@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 import atp_api.app as app_module
 from atp_api.app import create_app
 from atp_api.config import ApiSettings
+from atp_api.middleware.rate_limit import InMemoryRateLimiter
 from atp_platform.config import Settings
 
 
@@ -73,3 +74,47 @@ def test_two_apps_built_from_the_same_settings_are_independent(settings: Setting
     app_b = create_app(settings=settings)
     assert app_a is not app_b
     assert app_a.state.engine is not app_b.state.engine
+
+
+def test_create_app_defaults_both_rate_limiters_to_in_memory(settings: Settings) -> None:
+    """Phase 1 Step 15: `create_app`'s own default stays `InMemoryRateLimiter`
+    for both limiters - every Docker-free test in this package (and any
+    caller that does not explicitly ask for the distributed one) must keep
+    working exactly as before. Only `atp_api.main` opts into
+    `RedisRateLimiter`."""
+    app = create_app(settings=settings)
+    assert isinstance(app.state.login_rate_limiter, InMemoryRateLimiter)
+
+
+def test_create_app_accepts_an_explicit_login_rate_limiter(settings: Settings) -> None:
+    sentinel = InMemoryRateLimiter(limit=1, window_seconds=60)
+    app = create_app(settings=settings, login_rate_limiter=sentinel)
+    assert app.state.login_rate_limiter is sentinel
+
+
+def test_shutdown_closes_a_rate_limiter_that_exposes_close(settings: Settings) -> None:
+    """`atp_api.app.create_app`'s lifespan duck-types `close()` on whatever
+    limiter it was given (`RedisRateLimiter` has one; `InMemoryRateLimiter`
+    does not) - proven here with a plain stand-in exposing just that one
+    method, not a real Redis connection."""
+
+    class _ClosableLimiter:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def allow(self, key: str) -> bool:
+            return True
+
+        def close(self) -> None:
+            self.closed = True
+
+    general = _ClosableLimiter()
+    login = _ClosableLimiter()
+    app = create_app(settings=settings, rate_limiter=general, login_rate_limiter=login)  # type: ignore[arg-type]
+
+    with TestClient(app):
+        assert general.closed is False
+        assert login.closed is False
+
+    assert general.closed is True
+    assert login.closed is True

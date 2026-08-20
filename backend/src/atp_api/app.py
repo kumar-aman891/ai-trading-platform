@@ -35,6 +35,7 @@ def create_app(
     api_settings: ApiSettings | None = None,
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     rate_limiter: RateLimiter | None = None,
+    login_rate_limiter: RateLimiter | None = None,
 ) -> FastAPI:
     """Build a fully wired, ready-to-serve FastAPI app.
 
@@ -46,6 +47,16 @@ def create_app(
     required to prove `/readyz`, `/api/v1/audit/events`, etc. fail closed).
     Pass an explicit `session_factory` to point at a real or fake
     database instead.
+
+    `rate_limiter`/`login_rate_limiter=None` (the default) each build an
+    `InMemoryRateLimiter` - the correct choice for a single-process
+    deployment or a Docker-free test, and what every test in
+    `tests/unit/api/` still relies on. `atp_api.main` (the one real
+    process entrypoint) passes an explicit `RedisRateLimiter` for each
+    instead, so the deployed, potentially multi-process service shares one
+    budget per key across processes (`atp_api.middleware.rate_limit`'s own
+    module docstring). Either limiter passed in is closed (if it exposes a
+    `close()`) when the app's lifespan ends.
 
     `api_settings=None` builds one via `load_api_settings()`, which
     validates the environment (CORS wildcard+credentials, etc.) and raises
@@ -62,6 +73,18 @@ def create_app(
         engine = create_engine(settings.database_url.get_secret_value())
         resolved_session_factory = make_session_factory(engine)
 
+    limiter = rate_limiter or InMemoryRateLimiter(
+        limit=resolved_api_settings.rate_limit_requests,
+        window_seconds=resolved_api_settings.rate_limit_window_seconds,
+    )
+    # A separate, stricter limiter dedicated to POST /api/v1/auth/login
+    # (`atp_api.deps.enforce_login_rate_limit`) - independent bucket from
+    # the general per-path limiter above.
+    resolved_login_rate_limiter = login_rate_limiter or InMemoryRateLimiter(
+        limit=resolved_api_settings.login_rate_limit_requests,
+        window_seconds=resolved_api_settings.login_rate_limit_window_seconds,
+    )
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         try:
@@ -69,6 +92,13 @@ def create_app(
         finally:
             if engine is not None:
                 await engine.dispose()
+            # `close()` is not part of the `RateLimiter` Protocol (only
+            # `RedisRateLimiter` has a connection to release) - duck-typed
+            # rather than widening the Protocol for one implementation.
+            for candidate_limiter in (limiter, resolved_login_rate_limiter):
+                close = getattr(candidate_limiter, "close", None)
+                if callable(close):
+                    close()
 
     app = FastAPI(
         title=API_TITLE,
@@ -97,17 +127,7 @@ def create_app(
     app.include_router(instruments.router)
     app.include_router(paper.router)
 
-    limiter = rate_limiter or InMemoryRateLimiter(
-        limit=resolved_api_settings.rate_limit_requests,
-        window_seconds=resolved_api_settings.rate_limit_window_seconds,
-    )
-    # A separate, stricter limiter dedicated to POST /api/v1/auth/login
-    # (`atp_api.deps.enforce_login_rate_limit`) - independent bucket from
-    # the general per-path limiter above.
-    app.state.login_rate_limiter = InMemoryRateLimiter(
-        limit=resolved_api_settings.login_rate_limit_requests,
-        window_seconds=resolved_api_settings.login_rate_limit_window_seconds,
-    )
+    app.state.login_rate_limiter = resolved_login_rate_limiter
 
     # Registration order matters: Starlette makes the *last*-registered
     # middleware the *outermost* ASGI layer (it runs first on the way in,

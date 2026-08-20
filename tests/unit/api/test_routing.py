@@ -106,6 +106,7 @@ def test_audit_route_exists_and_is_get_only(settings: Settings) -> None:
 _ALLOWED_MUTATING_ROUTES = {
     "/api/v1/auth/login",
     "/api/v1/auth/logout",
+    "/api/v1/auth/password",
     "/api/v1/paper/proposals",
     "/api/v1/kill-switches/{switch_id}/engage",
     "/api/v1/kill-switches/{switch_id}/disengage",
@@ -114,7 +115,7 @@ _ALLOWED_MUTATING_ROUTES = {
 
 def test_only_get_head_and_the_sanctioned_post_routes_exist(settings: Settings) -> None:
     """No PUT/PATCH/DELETE route exists anywhere, and the only POST routes
-    are the two Step 8 authentication ones, Step 10's PAPER proposal
+    are the three Step 8/16 authentication ones, Step 10's PAPER proposal
     intake, and Step 14's kill-switch engage/disengage - nothing in this
     app can create or execute an Order (intake records a TradeProposal
     only, ADR-012), and the two kill-switch routes accept a `switch_id`

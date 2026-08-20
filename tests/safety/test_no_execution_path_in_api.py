@@ -72,6 +72,7 @@ def test_no_execution_live_directory_exists() -> None:
 _ALLOWED_MUTATING_ROUTES: dict[str, frozenset[str]] = {
     "/api/v1/auth/login": frozenset({"POST"}),
     "/api/v1/auth/logout": frozenset({"POST"}),
+    "/api/v1/auth/password": frozenset({"POST"}),
     "/api/v1/paper/proposals": frozenset({"POST"}),
     "/api/v1/kill-switches/{switch_id}/engage": frozenset({"POST"}),
     "/api/v1/kill-switches/{switch_id}/disengage": frozenset({"POST"}),

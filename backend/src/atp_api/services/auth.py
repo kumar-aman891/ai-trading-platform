@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from atp_api.security.csrf import csrf_tokens_match
-from atp_api.security.passwords import DUMMY_HASH, verify_password
+from atp_api.security.passwords import DUMMY_HASH, hash_password, verify_password
 from atp_api.security.tokens import hash_token
 from atp_api.services.sessions import (
     NewSession,
@@ -28,6 +28,8 @@ from atp_domain.audit import (
     ACTION_LOGIN_FAILED,
     ACTION_LOGIN_SUCCEEDED,
     ACTION_LOGOUT,
+    ACTION_PASSWORD_CHANGED,
+    ACTION_SESSION_REVOKED,
     AuditEvent,
 )
 from atp_domain.clock import Clock
@@ -193,6 +195,90 @@ async def logout(
             )
         )
     return "OK"
+
+
+@dataclass(frozen=True, slots=True)
+class ChangePasswordResult:
+    ok: bool
+    revoked_session_count: int = 0
+
+
+async def change_password(
+    uow: UnitOfWork,
+    *,
+    user_id: str,
+    current_password: str,
+    new_password: str,
+    current_raw_session_token: str | None,
+    correlation_id: str,
+    clock: Clock,
+    id_generator: IdGenerator,
+) -> ChangePasswordResult:
+    """`user_id` comes from an already-validated session
+    (`atp_api.deps.get_current_principal`), so unlike `login` there is no
+    "unknown username" case to defend against with `DUMMY_HASH` - the
+    caller has already proven their identity via a valid session cookie;
+    this only re-checks the password they additionally typed. `ok=False`
+    (wrong `current_password`, or the account having disappeared between
+    the caller's session lookup and this call) maps to the same
+    `AuthenticationFailedError` the router already uses elsewhere, so
+    nothing here reveals which case occurred.
+
+    On success: the new hash and a cleared `must_change_password` persist,
+    every *other* active session for this user is revoked
+    (`ACTION_SESSION_REVOKED` per revoked session - `docs/schemas/
+    session.md`'s existing "administrative revocation" meaning of
+    `revoked_at`, not a new one), and one `ACTION_PASSWORD_CHANGED` event
+    is written - all inside the caller's single `UnitOfWork` transaction
+    (ADR-010), so a failure partway through leaves neither the password
+    nor any session state changed.
+    """
+    now = clock.now()
+    user = await uow.users.get_by_id(user_id)
+    if user is None or not user.is_active:
+        return ChangePasswordResult(ok=False)
+
+    if not verify_password(user.password_hash, current_password):
+        return ChangePasswordResult(ok=False)
+
+    await uow.users.update_password(
+        user.user_id,
+        password_hash=hash_password(new_password),
+        must_change_password=False,
+        updated_at=now,
+    )
+    await uow.audit.save(
+        _audit_event(
+            id_generator=id_generator,
+            correlation_id=correlation_id,
+            now=now,
+            actor_type=ActorType.USER,
+            actor_id=user.user_id,
+            action=ACTION_PASSWORD_CHANGED,
+            decision="APPROVED",
+        )
+    )
+
+    current_session_hash = (
+        hash_token(current_raw_session_token) if current_raw_session_token else None
+    )
+    revoked_sessions = await uow.sessions.revoke_all_for_user(
+        user.user_id, except_session_id_hash=current_session_hash, revoked_at=now
+    )
+    for _revoked in revoked_sessions:
+        await uow.audit.save(
+            _audit_event(
+                id_generator=id_generator,
+                correlation_id=correlation_id,
+                now=now,
+                actor_type=ActorType.USER,
+                actor_id=user.user_id,
+                action=ACTION_SESSION_REVOKED,
+                decision="APPROVED",
+            )
+        )
+
+    return ChangePasswordResult(ok=True, revoked_session_count=len(revoked_sessions))
 
 
 async def record_authorization_denial(

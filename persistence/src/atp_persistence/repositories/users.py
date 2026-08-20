@@ -98,3 +98,22 @@ class SqlAlchemyUserRepository:
                 updated_at=updated_at,
             )
         )
+
+    async def update_password(
+        self,
+        user_id: str,
+        *,
+        password_hash: str,
+        must_change_password: bool,
+        updated_at: datetime,
+    ) -> None:
+        """A no-op if `user_id` no longer exists - mirrors
+        `SqlAlchemySessionRepository.revoke`'s own "load, mutate if
+        present" pattern rather than raising, since the row's existence
+        was already established by the caller's own session-derived
+        principal lookup moments earlier."""
+        row = await self._session.get(UserRow, user_id)
+        if row is not None:
+            row.password_hash = password_hash
+            row.must_change_password = must_change_password
+            row.updated_at = updated_at

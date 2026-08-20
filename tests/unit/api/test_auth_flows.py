@@ -38,6 +38,8 @@ from atp_domain.audit import (
     ACTION_AUTHORIZATION_DENIED,
     ACTION_LOGIN_FAILED,
     ACTION_LOGIN_SUCCEEDED,
+    ACTION_PASSWORD_CHANGED,
+    ACTION_SESSION_REVOKED,
 )
 from atp_persistence.repositories import UserRecord
 from tests.unit.api.fakes import FakeUnitOfWork
@@ -46,7 +48,14 @@ _PASSWORD = "correct horse battery staple"
 _PASSWORD_HASH = hash_password(_PASSWORD)  # module-level: argon2 hashing is slow, hash once
 
 
-def _seed_user(uow: FakeUnitOfWork, *, username: str, role: str, is_active: bool = True) -> str:
+def _seed_user(
+    uow: FakeUnitOfWork,
+    *,
+    username: str,
+    role: str,
+    is_active: bool = True,
+    must_change_password: bool = False,
+) -> str:
     created_at = datetime(2026, 1, 1, tzinfo=UTC)
     user_id = f"user-{username}"
     uow.users._by_id[user_id] = UserRecord(
@@ -55,7 +64,7 @@ def _seed_user(uow: FakeUnitOfWork, *, username: str, role: str, is_active: bool
         password_hash=_PASSWORD_HASH,
         role=role,
         is_active=is_active,
-        must_change_password=False,
+        must_change_password=must_change_password,
         created_at=created_at,
         updated_at=created_at,
     )
@@ -64,6 +73,26 @@ def _seed_user(uow: FakeUnitOfWork, *, username: str, role: str, is_active: bool
 
 def _login(client: TestClient, *, username: str, password: str = _PASSWORD):
     return client.post("/api/v1/auth/login", json={"username": username, "password": password})
+
+
+def _change_password(
+    client: TestClient,
+    *,
+    current_password: str,
+    new_password: str,
+    csrf_token: str | None = None,
+    include_csrf_header: bool = True,
+):
+    headers = {}
+    if include_csrf_header:
+        headers["x-csrf-token"] = (
+            csrf_token if csrf_token is not None else client.cookies.get(CSRF_COOKIE_NAME)
+        )
+    return client.post(
+        "/api/v1/auth/password",
+        json={"current_password": current_password, "new_password": new_password},
+        headers=headers,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -362,3 +391,208 @@ def test_live_trader_gets_no_route_a_paper_trader_does_not_also_get(
 
     for path in ("/api/v1/system/status", "/api/v1/kill-switches", "/api/v1/audit/events"):
         assert live_client.get(path).status_code == paper_client.get(path).status_code, path
+
+
+# ---------------------------------------------------------------------------
+# PASSWORD CHANGE (Phase 1 Step 16)
+# ---------------------------------------------------------------------------
+
+_NEW_PASSWORD = "a different correct horse battery staple"
+
+
+def test_password_change_without_a_session_is_rejected(client: TestClient) -> None:
+    response = client.post(
+        "/api/v1/auth/password",
+        json={"current_password": _PASSWORD, "new_password": _NEW_PASSWORD},
+    )
+    assert response.status_code == 401
+    assert response.json()["code"] == "SESSION_INVALID"
+
+
+def test_password_change_with_the_wrong_current_password_is_rejected(
+    client: TestClient, fake_uow
+) -> None:
+    _seed_user(fake_uow, username="sam", role=ROLE_VIEWER)
+    _login(client, username="sam")
+    response = _change_password(
+        client, current_password="totally wrong", new_password=_NEW_PASSWORD
+    )
+    assert response.status_code == 401
+    assert response.json()["code"] == "AUTHENTICATION_FAILED"
+    # The same generic error /login uses for a wrong password - no
+    # detail distinguishing "wrong current password" from any other
+    # authentication failure.
+    assert response.json()["message"] == "Authentication failed."
+
+
+def test_password_change_succeeds_with_the_correct_current_password(
+    client: TestClient, fake_uow
+) -> None:
+    _seed_user(fake_uow, username="tara", role=ROLE_VIEWER)
+    _login(client, username="tara")
+    response = _change_password(client, current_password=_PASSWORD, new_password=_NEW_PASSWORD)
+    assert response.status_code == 200
+    assert response.json() == {"message": "password changed"}
+
+
+def test_password_change_clears_must_change_password(client: TestClient, fake_uow) -> None:
+    _seed_user(fake_uow, username="uma", role=ROLE_VIEWER, must_change_password=True)
+    _login(client, username="uma")
+    assert client.get("/api/v1/auth/me").json()["must_change_password"] is True
+
+    _change_password(client, current_password=_PASSWORD, new_password=_NEW_PASSWORD)
+
+    assert client.get("/api/v1/auth/me").json()["must_change_password"] is False
+
+
+def test_new_password_works_for_a_subsequent_login(client: TestClient, fake_uow) -> None:
+    _seed_user(fake_uow, username="vince", role=ROLE_VIEWER)
+    _login(client, username="vince")
+    _change_password(client, current_password=_PASSWORD, new_password=_NEW_PASSWORD)
+
+    fresh_client = TestClient(client.app, base_url="https://testserver")
+    response = _login(fresh_client, username="vince", password=_NEW_PASSWORD)
+    assert response.status_code == 200
+
+
+def test_old_password_no_longer_works_after_a_change(client: TestClient, fake_uow) -> None:
+    _seed_user(fake_uow, username="wendy", role=ROLE_VIEWER)
+    _login(client, username="wendy")
+    _change_password(client, current_password=_PASSWORD, new_password=_NEW_PASSWORD)
+
+    fresh_client = TestClient(client.app, base_url="https://testserver")
+    response = _login(fresh_client, username="wendy", password=_PASSWORD)
+    assert response.status_code == 401
+
+
+def test_current_session_remains_valid_after_a_password_change(
+    client: TestClient, fake_uow
+) -> None:
+    _seed_user(fake_uow, username="xavier", role=ROLE_VIEWER)
+    _login(client, username="xavier")
+    _change_password(client, current_password=_PASSWORD, new_password=_NEW_PASSWORD)
+
+    response = client.get("/api/v1/auth/me")
+    assert response.status_code == 200
+
+
+def test_other_sessions_are_revoked_by_a_password_change(client: TestClient, fake_uow) -> None:
+    _seed_user(fake_uow, username="yara", role=ROLE_VIEWER)
+    other_client = TestClient(client.app, base_url="https://testserver")
+    _login(other_client, username="yara")
+    _login(client, username="yara")
+
+    assert other_client.get("/api/v1/auth/me").status_code == 200
+
+    _change_password(client, current_password=_PASSWORD, new_password=_NEW_PASSWORD)
+
+    assert client.get("/api/v1/auth/me").status_code == 200  # acting session: unaffected
+    other_response = other_client.get("/api/v1/auth/me")
+    assert other_response.status_code == 401  # every other session: revoked
+    assert other_response.json()["code"] == "SESSION_INVALID"
+
+
+def test_password_change_records_an_audit_event_with_the_user_id(
+    client: TestClient, fake_uow
+) -> None:
+    user_id = _seed_user(fake_uow, username="zack", role=ROLE_VIEWER)
+    _login(client, username="zack")
+    _change_password(client, current_password=_PASSWORD, new_password=_NEW_PASSWORD)
+
+    events = [e for e in fake_uow.audit.events if e.action == ACTION_PASSWORD_CHANGED]
+    assert len(events) == 1
+    assert events[0].actor_id == user_id
+
+
+def test_a_revoked_other_session_gets_its_own_session_revoked_audit_event(
+    client: TestClient, fake_uow
+) -> None:
+    _seed_user(fake_uow, username="abby", role=ROLE_VIEWER)
+    other_client = TestClient(client.app, base_url="https://testserver")
+    _login(other_client, username="abby")
+    _login(client, username="abby")
+
+    _change_password(client, current_password=_PASSWORD, new_password=_NEW_PASSWORD)
+
+    events = [e for e in fake_uow.audit.events if e.action == ACTION_SESSION_REVOKED]
+    assert len(events) == 1
+
+
+def test_a_failed_password_change_writes_no_audit_event_and_revokes_no_session(
+    client: TestClient, fake_uow
+) -> None:
+    """The audit event and the session revocations only ever happen
+    together with the actual password change - never on the rejected
+    (wrong-current-password) path. `atp_api.services.auth.change_password`
+    only calls `uow.audit.save`/`uow.sessions.revoke_all_for_user` after
+    the password hash has already been updated, so their presence or
+    absence tracks the state change exactly - the same proxy for
+    single-transaction atomicity `tests/unit/api/test_kill_switches.py`
+    uses for its own no-op-vs-genuine-transition assertions."""
+    _seed_user(fake_uow, username="bert", role=ROLE_VIEWER)
+    other_client = TestClient(client.app, base_url="https://testserver")
+    _login(other_client, username="bert")
+    _login(client, username="bert")
+
+    response = _change_password(
+        client, current_password="totally wrong", new_password=_NEW_PASSWORD
+    )
+    assert response.status_code == 401
+
+    assert not [e for e in fake_uow.audit.events if e.action == ACTION_PASSWORD_CHANGED]
+    assert not [e for e in fake_uow.audit.events if e.action == ACTION_SESSION_REVOKED]
+    assert other_client.get("/api/v1/auth/me").status_code == 200  # still live
+
+
+def test_password_change_without_a_csrf_header_is_rejected(client: TestClient, fake_uow) -> None:
+    _seed_user(fake_uow, username="carl", role=ROLE_VIEWER)
+    _login(client, username="carl")
+    response = _change_password(
+        client,
+        current_password=_PASSWORD,
+        new_password=_NEW_PASSWORD,
+        include_csrf_header=False,
+    )
+    assert response.status_code == 403
+    assert response.json()["code"] == "CSRF_FAILED"
+    # No side effect from the rejected request - the old password still works.
+    fresh_client = TestClient(client.app, base_url="https://testserver")
+    assert _login(fresh_client, username="carl", password=_PASSWORD).status_code == 200
+
+
+def test_password_change_with_a_mismatched_csrf_header_is_rejected(
+    client: TestClient, fake_uow
+) -> None:
+    _seed_user(fake_uow, username="dina", role=ROLE_VIEWER)
+    _login(client, username="dina")
+    response = _change_password(
+        client,
+        current_password=_PASSWORD,
+        new_password=_NEW_PASSWORD,
+        csrf_token="forged-value",
+    )
+    assert response.status_code == 403
+    assert response.json()["code"] == "CSRF_FAILED"
+
+
+def test_password_values_never_appear_in_a_failed_change_response(
+    client: TestClient, fake_uow
+) -> None:
+    _seed_user(fake_uow, username="ella", role=ROLE_VIEWER)
+    _login(client, username="ella")
+    response = _change_password(
+        client, current_password="totally wrong", new_password=_NEW_PASSWORD
+    )
+    assert "totally wrong" not in response.text
+    assert _NEW_PASSWORD not in response.text
+    assert _PASSWORD_HASH not in response.text
+
+
+def test_password_values_never_appear_in_a_successful_change_response(
+    client: TestClient, fake_uow
+) -> None:
+    _seed_user(fake_uow, username="finn", role=ROLE_VIEWER)
+    _login(client, username="finn")
+    response = _change_password(client, current_password=_PASSWORD, new_password=_NEW_PASSWORD)
+    assert _PASSWORD not in response.text
+    assert _NEW_PASSWORD not in response.text

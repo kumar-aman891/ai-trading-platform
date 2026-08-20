@@ -211,6 +211,130 @@ def test_viewer_role_is_forbidden_from_kill_switches_against_a_real_database(
         delete_user_cascade(owner_connection, user_id)
 
 
+def test_password_change_round_trips_through_real_tables(
+    migrated_database: str, owner_dsn: str, owner_connection: psycopg.Connection
+) -> None:
+    """The real Argon2id round trip, the real `core.users` write, real
+    session revocation, and the whole thing inside one real transaction -
+    what `tests/unit/api/test_auth_flows.py`'s in-memory fake cannot
+    prove. Two sessions for the same user, one on `client` (the acting
+    session, which must survive) and one on `other_client` (which must be
+    revoked)."""
+    user_id = _insert_user(
+        owner_connection,
+        username=f"itest-pwchange-{_new_uuid()}",
+        password="the original password",
+        role=ROLE_VIEWER,
+    )
+    try:
+        username = _get_username(owner_connection, user_id)
+        client = _build_client(owner_dsn)
+        other_client = _build_client(owner_dsn)
+
+        assert (
+            other_client.post(
+                "/api/v1/auth/login",
+                json={"username": username, "password": "the original password"},
+            ).status_code
+            == 200
+        )
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": "the original password"},
+        )
+        assert login.status_code == 200, login.text
+
+        csrf_cookie = client.cookies.get("atp_csrf")
+        change = client.post(
+            "/api/v1/auth/password",
+            json={"current_password": "the original password", "new_password": "a new password"},
+            headers={"x-csrf-token": csrf_cookie},
+        )
+        assert change.status_code == 200, change.text
+
+        with owner_connection.cursor() as cur:
+            cur.execute(
+                "SELECT password_hash, must_change_password FROM core.users WHERE user_id = %s",
+                (user_id,),
+            )
+            password_hash, must_change_password = cur.fetchone()  # type: ignore[misc]
+        assert password_hash != hash_password("the original password")
+        assert must_change_password is False
+
+        # Current (acting) session: still valid, no re-login needed.
+        assert client.get("/api/v1/auth/me").status_code == 200
+
+        # The other session: revoked.
+        assert other_client.get("/api/v1/auth/me").status_code == 401
+
+        # Old password no longer authenticates; new password does.
+        stale_login = client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": "the original password"},
+        )
+        assert stale_login.status_code == 401
+        fresh_login = client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": "a new password"},
+        )
+        assert fresh_login.status_code == 200
+
+        with owner_connection.cursor() as cur:
+            cur.execute(
+                "SELECT revoked_at IS NOT NULL FROM core.sessions WHERE user_id = %s "
+                "ORDER BY created_at",
+                (user_id,),
+            )
+            revoked_flags = [row[0] for row in cur.fetchall()]
+        # Three sessions exist by now (other_client's original, client's
+        # original, client's fresh re-login above) - exactly one
+        # (other_client's) was revoked by the password change itself.
+        assert sum(1 for revoked in revoked_flags if revoked) == 1
+    finally:
+        delete_user_cascade(owner_connection, user_id)
+
+
+def test_password_change_with_the_wrong_current_password_changes_nothing(
+    migrated_database: str, owner_dsn: str, owner_connection: psycopg.Connection
+) -> None:
+    user_id = _insert_user(
+        owner_connection,
+        username=f"itest-pwchange-wrong-{_new_uuid()}",
+        password="the original password",
+        role=ROLE_VIEWER,
+    )
+    try:
+        username = _get_username(owner_connection, user_id)
+        client = _build_client(owner_dsn)
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"username": username, "password": "the original password"},
+        )
+        assert login.status_code == 200, login.text
+
+        with owner_connection.cursor() as cur:
+            cur.execute("SELECT password_hash FROM core.users WHERE user_id = %s", (user_id,))
+            (original_hash,) = cur.fetchone()  # type: ignore[misc]
+
+        csrf_cookie = client.cookies.get("atp_csrf")
+        change = client.post(
+            "/api/v1/auth/password",
+            json={"current_password": "totally wrong", "new_password": "a new password"},
+            headers={"x-csrf-token": csrf_cookie},
+        )
+        assert change.status_code == 401
+
+        with owner_connection.cursor() as cur:
+            cur.execute("SELECT password_hash FROM core.users WHERE user_id = %s", (user_id,))
+            (unchanged_hash,) = cur.fetchone()  # type: ignore[misc]
+        assert unchanged_hash == original_hash
+
+        # The acting session itself is untouched by a rejected change.
+        assert client.get("/api/v1/auth/me").status_code == 200
+    finally:
+        delete_user_cascade(owner_connection, user_id)
+
+
 def test_bootstrap_admin_creates_the_first_administrator(
     migrated_database: str, owner_dsn: str, owner_connection: psycopg.Connection
 ) -> None:

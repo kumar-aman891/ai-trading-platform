@@ -69,6 +69,27 @@ class FakeUserRepository:
             updated_at=updated_at,
         )
 
+    async def update_password(
+        self,
+        user_id: str,
+        *,
+        password_hash: str,
+        must_change_password: bool,
+        updated_at: datetime,
+    ) -> None:
+        existing = self._by_id.get(user_id)
+        if existing is not None:
+            self._by_id[user_id] = UserRecord(
+                user_id=existing.user_id,
+                username=existing.username,
+                password_hash=password_hash,
+                role=existing.role,
+                is_active=existing.is_active,
+                must_change_password=must_change_password,
+                created_at=existing.created_at,
+                updated_at=updated_at,
+            )
+
 
 class FakeSessionRepository:
     def __init__(self) -> None:
@@ -122,6 +143,28 @@ class FakeSessionRepository:
                 revoked_at=revoked_at,
                 ip_address=existing.ip_address,
             )
+
+    async def revoke_all_for_user(
+        self, user_id: str, *, except_session_id_hash: str | None, revoked_at: datetime
+    ) -> list[SessionRecord]:
+        revoked: list[SessionRecord] = []
+        for session_id_hash, existing in list(self._by_hash.items()):
+            if existing.user_id != user_id or existing.revoked_at is not None:
+                continue
+            if except_session_id_hash is not None and session_id_hash == except_session_id_hash:
+                continue
+            updated = SessionRecord(
+                session_id_hash=existing.session_id_hash,
+                user_id=existing.user_id,
+                csrf_token=existing.csrf_token,
+                created_at=existing.created_at,
+                expires_at=existing.expires_at,
+                revoked_at=revoked_at,
+                ip_address=existing.ip_address,
+            )
+            self._by_hash[session_id_hash] = updated
+            revoked.append(updated)
+        return revoked
 
 
 class FakeAuditEventWriter:

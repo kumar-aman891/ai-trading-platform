@@ -90,3 +90,25 @@ class SqlAlchemySessionRepository:
         row = await self._session.get(SessionRow, session_id_hash)
         if row is not None and row.revoked_at is None:
             row.revoked_at = revoked_at
+
+    async def revoke_all_for_user(
+        self, user_id: str, *, except_session_id_hash: str | None, revoked_at: datetime
+    ) -> list[SessionRecord]:
+        """Bulk administrative revocation - every *other* active session for
+        this user (`docs/schemas/session.md`: `revoked_at` is "logout or
+        administrative revocation"), e.g. on a password change. Excludes
+        `except_session_id_hash` (the caller's own current session) so the
+        request that triggered this never invalidates itself. Returns the
+        sessions actually revoked, so the caller can write one audit event
+        per revocation (mirrors `revoke`'s own idempotent-by-construction
+        shape - already-revoked rows are never re-touched or re-returned)."""
+        result = await self._session.execute(
+            select(SessionRow).where(SessionRow.user_id == user_id, SessionRow.revoked_at.is_(None))
+        )
+        revoked: list[SessionRecord] = []
+        for row in result.scalars().all():
+            if except_session_id_hash is not None and row.session_id_hash == except_session_id_hash:
+                continue
+            row.revoked_at = revoked_at
+            revoked.append(_row_to_record(row))
+        return revoked

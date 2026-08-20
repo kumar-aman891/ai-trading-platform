@@ -1,5 +1,6 @@
 """`POST /api/v1/auth/login`, `POST /api/v1/auth/logout`,
-`GET /api/v1/auth/me` (Phase 1 Step 8).
+`GET /api/v1/auth/me` (Phase 1 Step 8), `POST /api/v1/auth/password`
+(Phase 1 Step 16).
 
 No route here contains authentication business logic - each delegates to
 `atp_api.services.auth`/`atp_api.services.sessions` and only handles the
@@ -15,6 +16,7 @@ from fastapi import APIRouter, Depends, Request, Response
 
 from atp_api.deps import (
     AuthenticatedPrincipal,
+    enforce_csrf,
     enforce_login_rate_limit,
     get_clock,
     get_current_principal,
@@ -23,7 +25,13 @@ from atp_api.deps import (
     get_unit_of_work,
 )
 from atp_api.errors import AuthenticationFailedError, CsrfError
-from atp_api.schemas.auth import LoginRequest, LoginResponse, MeResponse, MessageResponse
+from atp_api.schemas.auth import (
+    LoginRequest,
+    LoginResponse,
+    MeResponse,
+    MessageResponse,
+    PasswordChangeRequest,
+)
 from atp_api.security.cookies import (
     CSRF_COOKIE_NAME,
     SESSION_COOKIE_NAME,
@@ -129,3 +137,32 @@ async def me(
         role=principal.role,  # type: ignore[arg-type]  # core.users CHECK constraint guarantees membership
         must_change_password=principal.must_change_password,
     )
+
+
+@router.post("/password", response_model=MessageResponse, dependencies=[Depends(enforce_csrf)])
+async def change_password(
+    # Runs with an authenticated session already in hand (like /logout,
+    # unlike /login), so CSRF is checked unconditionally via enforce_csrf.
+    # No permission is required beyond having a valid session - a user may
+    # only ever change their own password.
+    payload: PasswordChangeRequest,
+    request: Request,
+    principal: Annotated[AuthenticatedPrincipal, Depends(get_current_principal)],
+    uow: Annotated[UnitOfWork, Depends(get_unit_of_work)],
+    clock: Annotated[Clock, Depends(get_clock)],
+    id_generator: Annotated[IdGenerator, Depends(get_id_generator)],
+) -> MessageResponse:
+    result = await auth_service.change_password(
+        uow,
+        user_id=principal.user_id,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+        current_raw_session_token=request.cookies.get(SESSION_COOKIE_NAME),
+        correlation_id=get_correlation_id() or new_correlation_id(),
+        clock=clock,
+        id_generator=id_generator,
+    )
+    if not result.ok:
+        raise AuthenticationFailedError()
+
+    return MessageResponse(message="password changed")

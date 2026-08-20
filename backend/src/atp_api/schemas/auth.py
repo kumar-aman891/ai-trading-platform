@@ -20,6 +20,16 @@ class LoginRequest(ApiModel):
     password: str = Field(min_length=1, max_length=1024)
 
 
+class PasswordChangeRequest(ApiModel):
+    """Same `Field` constraints as `LoginRequest.password` - Phase 1 has no
+    password-strength policy anywhere in the repository (login/bootstrap
+    both only require non-empty), so this reuses that exact bound rather
+    than inventing a new one."""
+
+    current_password: str = Field(min_length=1, max_length=1024)
+    new_password: str = Field(min_length=1, max_length=1024)
+
+
 class LoginResponse(ApiModel):
     username: str
     role: Literal["viewer", "researcher", "paper_trader", "live_trader", "administrator"]

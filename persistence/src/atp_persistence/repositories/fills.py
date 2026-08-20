@@ -8,7 +8,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -40,3 +40,27 @@ class SqlAlchemyFillRepository:
             .order_by(FillRow.filled_at)
         )
         return [row_to_fill(row) for row in result.scalars().all()]
+
+    async def list_by_orders(
+        self, internal_order_ids: Sequence[OrderId]
+    ) -> Mapping[OrderId, Sequence[Fill]]:
+        """Batched form of `list_by_order` - one query for many orders
+        (`atp_api.services.paper_ledger.list_proposals`'s N+1 fix).
+        Preserves `list_by_order`'s per-order `filled_at` ascending
+        ordering: rows are appended to each order's list in the order the
+        single `ORDER BY filled_at` query returns them, so a given order's
+        list is exactly what a separate `list_by_order` call for it would
+        return. An order with no fills is simply absent from the returned
+        mapping, matching `list_by_order`'s empty list for that case
+        (callers use `.get(order_id, ())`)."""
+        if not internal_order_ids:
+            return {}
+        result = await self._session.execute(
+            select(FillRow)
+            .where(FillRow.internal_order_id.in_([str(o) for o in internal_order_ids]))
+            .order_by(FillRow.filled_at)
+        )
+        grouped: dict[OrderId, list[Fill]] = {}
+        for row in result.scalars().all():
+            grouped.setdefault(OrderId(row.internal_order_id), []).append(row_to_fill(row))
+        return grouped

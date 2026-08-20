@@ -300,25 +300,59 @@ class FakeRiskDecisionRepository:
         self._by_proposal_id: dict[str, RiskDecision] = {
             d.proposal_id: d for d in (decisions or [])
         }
+        self.get_by_proposal_calls: list[ProposalId] = []
+        self.get_by_proposals_calls: list[Sequence[ProposalId]] = []
 
     async def get_by_proposal(self, proposal_id: ProposalId) -> RiskDecision | None:
+        self.get_by_proposal_calls.append(proposal_id)
         return self._by_proposal_id.get(proposal_id)
+
+    async def get_by_proposals(
+        self, proposal_ids: Sequence[ProposalId]
+    ) -> dict[ProposalId, RiskDecision]:
+        self.get_by_proposals_calls.append(proposal_ids)
+        return {
+            pid: self._by_proposal_id[pid] for pid in proposal_ids if pid in self._by_proposal_id
+        }
 
 
 class FakeOrderRepository:
     def __init__(self, orders: list[Order] | None = None) -> None:
         self._by_proposal_id: dict[str, Order] = {o.proposal_id: o for o in (orders or [])}
+        self.get_by_proposal_calls: list[ProposalId] = []
+        self.get_by_proposals_calls: list[Sequence[ProposalId]] = []
 
     async def get_by_proposal(self, proposal_id: ProposalId) -> Order | None:
+        self.get_by_proposal_calls.append(proposal_id)
         return self._by_proposal_id.get(proposal_id)
+
+    async def get_by_proposals(self, proposal_ids: Sequence[ProposalId]) -> dict[ProposalId, Order]:
+        self.get_by_proposals_calls.append(proposal_ids)
+        return {
+            pid: self._by_proposal_id[pid] for pid in proposal_ids if pid in self._by_proposal_id
+        }
 
 
 class FakeFillRepository:
     def __init__(self, fills: list[Fill] | None = None) -> None:
         self._fills: list[Fill] = list(fills or [])
+        self.list_by_order_calls: list[OrderId] = []
+        self.list_by_orders_calls: list[Sequence[OrderId]] = []
 
     async def list_by_order(self, internal_order_id: OrderId) -> Sequence[Fill]:
+        self.list_by_order_calls.append(internal_order_id)
         return [f for f in self._fills if f.internal_order_id == internal_order_id]
+
+    async def list_by_orders(
+        self, internal_order_ids: Sequence[OrderId]
+    ) -> dict[OrderId, Sequence[Fill]]:
+        self.list_by_orders_calls.append(internal_order_ids)
+        grouped: dict[OrderId, list[Fill]] = {}
+        wanted = set(internal_order_ids)
+        for fill in self._fills:
+            if fill.internal_order_id in wanted:
+                grouped.setdefault(fill.internal_order_id, []).append(fill)
+        return grouped
 
 
 class FakePositionRepository:

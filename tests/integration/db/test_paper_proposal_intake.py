@@ -20,7 +20,8 @@ from decimal import Decimal
 import psycopg
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from atp_api.app import create_app
 from atp_api.config import ApiSettings
@@ -279,3 +280,142 @@ def test_full_loop_intake_then_gateway_then_ledger_read(
     cash_response = client.get("/api/v1/paper/cash")
     assert cash_response.status_code == 200
     assert cash_response.json()["balance"] is not None
+
+
+# ---------------------------------------------------------------------------
+# Phase 1 Step 17: paper_ledger.list_proposals's N+1 fix
+# ---------------------------------------------------------------------------
+
+
+def _build_client_with_engine(api_dsn: str) -> tuple[TestClient, AsyncEngine]:
+    """Like `_build_client`, but also returns the `AsyncEngine` so a test
+    can attach a query-counting listener to it - `create_app`'s own
+    `app.state.engine` stays `None` when an explicit `session_factory` is
+    passed in (`atp_api.app.create_app`'s docstring), so it cannot be
+    recovered from the built app afterward."""
+    settings = Settings(
+        session_secret_key="a" * 40,  # type: ignore[arg-type]
+        database_url=_as_async_psycopg_url(api_dsn),  # type: ignore[arg-type]
+        redis_url="redis://:x@localhost:6379/0",  # type: ignore[arg-type]
+    )
+    engine = create_async_engine(_as_async_psycopg_url(api_dsn))
+    session_factory = make_session_factory(engine)
+    app = create_app(settings=settings, api_settings=ApiSettings(), session_factory=session_factory)
+    client = TestClient(app, base_url="https://testserver", client=("127.0.0.1", 50000))
+    return client, engine
+
+
+def _insert_bare_proposal(
+    owner_connection: psycopg.Connection,
+    *,
+    proposal_id: str,
+    instrument_id: str,
+    created_by: str,
+    client_request_id: str,
+) -> None:
+    """A `paper.trade_proposals` row only - no decision/order/fill. The
+    N+1 fix's query-count claim holds regardless of whether those child
+    rows exist (an absent decision/order is a `None` in the batched
+    mapping, not a skipped query), so seeding proposals alone is enough to
+    prove it without threading through `order_intents`' own FK chain."""
+    with owner_connection.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO paper.trade_proposals
+                (proposal_id, mode, instrument_id, side, quantity, order_type, limit_price,
+                 product, client_request_id, expected_risk, created_by, created_at)
+            VALUES (%s, 'PAPER', %s, 'BUY', 10, 'LIMIT', 100, 'CNC', %s, '{}'::jsonb, %s, now())
+            """,
+            (proposal_id, instrument_id, client_request_id, created_by),
+        )
+    owner_connection.commit()
+
+
+def _count_ledger_batch_queries(
+    client: TestClient, engine: AsyncEngine, *, limit: int
+) -> dict[str, int]:
+    """Counts real SQL statements against `paper.risk_decisions`/
+    `paper.orders`/`paper.fills` issued while serving one
+    `GET /api/v1/paper/proposals` request - the thing no in-memory-fake
+    call-count assertion (`tests/unit/api/test_paper_ledger.py`) can prove
+    on its own: that the batched repository methods really do compile to
+    one `SELECT ... WHERE ... IN (...)` each under the real `atp_api`
+    role, not one query per proposal. Ignores every other statement
+    (session/user lookups, the proposals list query itself, connection
+    setup) so the assertion is not brittle against unrelated queries this
+    request also legitimately issues."""
+    counts = {"risk_decisions": 0, "orders": 0, "fills": 0}
+
+    def _before_cursor_execute(conn, cursor, statement, parameters, context, executemany) -> None:
+        lowered = statement.lower()
+        for table in counts:
+            if f"paper.{table}" in lowered:
+                counts[table] += 1
+
+    event.listen(engine.sync_engine, "before_cursor_execute", _before_cursor_execute)
+    try:
+        response = client.get("/api/v1/paper/proposals", params={"limit": limit})
+        assert response.status_code == 200
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", _before_cursor_execute)
+    return counts
+
+
+def test_list_proposals_batched_query_count_is_independent_of_page_size(
+    api_dsn: str,
+    owner_connection: psycopg.Connection,
+    seeded_instrument_id: str,
+    seeded_trader: tuple[str, str, str],
+) -> None:
+    user_id, username, password = seeded_trader
+    seeded_proposal_ids: list[str] = []
+    try:
+        for i in range(10):
+            proposal_id = _new_uuid()
+            _insert_bare_proposal(
+                owner_connection,
+                proposal_id=proposal_id,
+                instrument_id=seeded_instrument_id,
+                created_by=user_id,
+                client_request_id=f"itest-nplus1-{i}-{_new_uuid()}",
+            )
+            seeded_proposal_ids.append(proposal_id)
+
+        client_a, engine_a = _build_client_with_engine(api_dsn)
+        try:
+            _login(client_a, username=username, password=password)
+            counts_at_10 = _count_ledger_batch_queries(client_a, engine_a, limit=50)
+        finally:
+            asyncio.run(engine_a.dispose())
+
+        for i in range(40):
+            proposal_id = _new_uuid()
+            _insert_bare_proposal(
+                owner_connection,
+                proposal_id=proposal_id,
+                instrument_id=seeded_instrument_id,
+                created_by=user_id,
+                client_request_id=f"itest-nplus1-more-{i}-{_new_uuid()}",
+            )
+            seeded_proposal_ids.append(proposal_id)
+
+        client_b, engine_b = _build_client_with_engine(api_dsn)
+        try:
+            _login(client_b, username=username, password=password)
+            counts_at_50 = _count_ledger_batch_queries(client_b, engine_b, limit=50)
+        finally:
+            asyncio.run(engine_b.dispose())
+
+        # Exactly one risk_decisions query and one orders query either
+        # way - not one per proposal. No order exists for any seeded
+        # proposal, so `orders_by_proposal` is empty and the fills batch
+        # read is skipped entirely (its own empty-input guard) rather than
+        # issuing a query with an empty IN (): 0 either way, still O(1).
+        assert counts_at_10 == counts_at_50 == {"risk_decisions": 1, "orders": 1, "fills": 0}
+    finally:
+        with owner_connection.cursor() as cur:
+            cur.execute(
+                "DELETE FROM paper.trade_proposals WHERE proposal_id = ANY(%s)",
+                (seeded_proposal_ids,),
+            )
+        owner_connection.commit()

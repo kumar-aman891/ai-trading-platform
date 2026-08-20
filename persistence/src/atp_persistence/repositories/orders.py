@@ -10,6 +10,8 @@ parameter).
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -37,3 +39,18 @@ class SqlAlchemyOrderRepository:
         )
         row = result.scalar_one_or_none()
         return row_to_order(row) if row is not None else None
+
+    async def get_by_proposals(
+        self, proposal_ids: Sequence[ProposalId]
+    ) -> Mapping[ProposalId, Order]:
+        """Batched form of `get_by_proposal` - one query for many proposals
+        (`atp_api.services.paper_ledger.list_proposals`'s N+1 fix).
+        `paper.orders.proposal_id` is unique (`OrderRow`), so at most one
+        entry per key; a proposal_id with no order yet is simply absent
+        from the returned mapping, matching `get_by_proposal`'s `None`."""
+        if not proposal_ids:
+            return {}
+        result = await self._session.execute(
+            select(OrderRow).where(OrderRow.proposal_id.in_([str(p) for p in proposal_ids]))
+        )
+        return {ProposalId(row.proposal_id): row_to_order(row) for row in result.scalars().all()}

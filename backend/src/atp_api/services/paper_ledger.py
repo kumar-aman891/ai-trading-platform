@@ -11,11 +11,12 @@ loop has not reached yet; it is not an error.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 
+from atp_domain.orders import Fill, Order
 from atp_domain.proposals import TradeProposal
 from atp_domain.risk.engine import RiskDecision
 from atp_domain.types import Mode, OrderId, ProposalId
@@ -113,16 +114,17 @@ def _decision_view(decision: RiskDecision) -> RiskDecisionView:
     )
 
 
-async def _build_proposal_view(
+def _assemble_proposal_view(
     proposal: TradeProposal,
     *,
-    risk_decisions: SqlAlchemyRiskDecisionRepository,
-    orders: SqlAlchemyOrderRepository,
-    fills: SqlAlchemyFillRepository,
+    decision: RiskDecision | None,
+    order: Order | None,
+    matching_fills: Sequence[Fill],
 ) -> ProposalView:
-    decision = await risk_decisions.get_by_proposal(proposal.proposal_id)
-    order = await orders.get_by_proposal(proposal.proposal_id)
-
+    """Pure assembly from already-fetched data - shared by `_build_proposal_view`
+    (one proposal, single-row repository reads) and `list_proposals` (a
+    page of proposals, batched repository reads), so the two call sites
+    can never drift on how a `ProposalView` is built from its parts."""
     order_view: OrderView | None = None
     fill_view: FillView | None = None
     if order is not None:
@@ -132,7 +134,6 @@ async def _build_proposal_view(
             submitted_at=order.submitted_at,
             last_update_at=order.last_update_at,
         )
-        matching_fills = await fills.list_by_order(OrderId(order.internal_order_id))
         if matching_fills:
             # Phase 1's simulator produces at most one fill per order (no
             # partial fills, fill.md) - the first (only) fill is the whole
@@ -165,6 +166,26 @@ async def _build_proposal_view(
     )
 
 
+async def _build_proposal_view(
+    proposal: TradeProposal,
+    *,
+    risk_decisions: SqlAlchemyRiskDecisionRepository,
+    orders: SqlAlchemyOrderRepository,
+    fills: SqlAlchemyFillRepository,
+) -> ProposalView:
+    """Single-proposal, single-row reads - used by `get_proposal_detail`
+    only, which needs exactly one proposal's data and gains nothing from
+    the batched reads `list_proposals` uses instead."""
+    decision = await risk_decisions.get_by_proposal(proposal.proposal_id)
+    order = await orders.get_by_proposal(proposal.proposal_id)
+    matching_fills: Sequence[Fill] = ()
+    if order is not None:
+        matching_fills = await fills.list_by_order(OrderId(order.internal_order_id))
+    return _assemble_proposal_view(
+        proposal, decision=decision, order=order, matching_fills=matching_fills
+    )
+
+
 async def get_proposal_detail(
     proposal_id: str,
     *,
@@ -191,18 +212,40 @@ async def list_proposals(
     before: datetime | None,
     limit: int,
 ) -> ProposalPageView:
+    """Exactly one query for the page of proposals, plus exactly three
+    batched reads (decisions, orders, fills) regardless of page size -
+    the N+1 fix for what was previously three reads *per proposal*
+    (`_build_proposal_view`'s single-row reads, still used by
+    `get_proposal_detail`, which only ever needs one proposal's worth)."""
     bounded_limit = max(1, min(limit, MAX_PAGE_SIZE))
     proposals: Sequence[TradeProposal] = await trade_proposals.list_for_mode(
         mode, before=before, limit=bounded_limit
     )
-    items = tuple(
-        [
-            await _build_proposal_view(
-                proposal, risk_decisions=risk_decisions, orders=orders, fills=fills
+    if not proposals:
+        return ProposalPageView(items=(), next_before=None, limit=bounded_limit)
+
+    proposal_ids = [proposal.proposal_id for proposal in proposals]
+    decisions_by_proposal = await risk_decisions.get_by_proposals(proposal_ids)
+    orders_by_proposal = await orders.get_by_proposals(proposal_ids)
+    order_ids = [OrderId(order.internal_order_id) for order in orders_by_proposal.values()]
+    fills_by_order: Mapping[OrderId, Sequence[Fill]] = await fills.list_by_orders(order_ids)
+
+    views = []
+    for proposal in proposals:
+        order = orders_by_proposal.get(proposal.proposal_id)
+        matching_fills: Sequence[Fill] = (
+            fills_by_order.get(OrderId(order.internal_order_id), ()) if order is not None else ()
+        )
+        views.append(
+            _assemble_proposal_view(
+                proposal,
+                decision=decisions_by_proposal.get(proposal.proposal_id),
+                order=order,
+                matching_fills=matching_fills,
             )
-            for proposal in proposals
-        ]
-    )
+        )
+
+    items = tuple(views)
     next_before = items[-1].created_at if len(items) == bounded_limit else None
     return ProposalPageView(items=items, next_before=next_before, limit=bounded_limit)
 

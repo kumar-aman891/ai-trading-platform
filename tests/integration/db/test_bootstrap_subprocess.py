@@ -170,15 +170,13 @@ def test_second_invocation_after_a_successful_bootstrap_fails_with_no_duplicate(
 
         second = _run_bootstrap_cli(env)
         assert second.returncode != 0
-        # `bootstrap_admin`'s `BootstrapAlreadyCompletedError` is not caught
-        # anywhere in `main()`/`_run()` - it reaches the interpreter as an
-        # unhandled exception (a real traceback on stderr), unlike the
-        # missing-env-var case below, which raises a deliberate `SystemExit`
-        # instead. Both are legitimate non-zero exits; only the shape
-        # differs - asserted here so a future accidental change to either
-        # path is caught by whichever assertion it breaks.
-        assert "BootstrapAlreadyCompletedError" in second.stderr
+        # `main()` now catches `BootstrapError` and re-raises it as a
+        # `SystemExit` with the exception's own human-readable message -
+        # the same clean-exit shape the missing-env-var case below already
+        # used, closing the gap the previous milestone deliberately left
+        # open (a raw unhandled traceback for this exact case).
         assert "already run" in second.stderr
+        assert "Traceback" not in second.stderr
 
         with owner_connection.cursor() as cur:
             cur.execute("SELECT count(*) FROM core.users WHERE username LIKE %s", (f"{username}%",))

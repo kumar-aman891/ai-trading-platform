@@ -146,14 +146,24 @@ def main() -> None:
             "BOOTSTRAP_ADMIN_TOKEN, BOOTSTRAP_ADMIN_USERNAME, and "
             "BOOTSTRAP_ADMIN_PASSWORD must all be set in the environment."
         )
-    asyncio.run(
-        _run(
-            database_url=settings.database_url.get_secret_value(),
-            token=token,
-            username=username,
-            password=password,
+    try:
+        asyncio.run(
+            _run(
+                database_url=settings.database_url.get_secret_value(),
+                token=token,
+                username=username,
+                password=password,
+            )
         )
-    )
+    except BootstrapError as exc:
+        # An expected, already-human-readable bootstrap failure (wrong/
+        # missing token, or core.users already non-empty) - a clean
+        # non-zero exit with that message, not a raw traceback, matching
+        # the missing-env-var SystemExit above. Only BootstrapError itself
+        # is caught here - a real programming or database failure (a
+        # connection error, an unexpected exception from bootstrap_admin)
+        # still propagates as a full traceback, exactly as before.
+        raise SystemExit(str(exc)) from exc
 
 
 if __name__ == "__main__":

@@ -295,11 +295,10 @@ step," not a literal promise about which step number will do it.
 - Actual Docker integration validation (`docker compose config`,
   startup/health, the full `tests/integration/db/` suite) - none of this
   has run against a real database in this environment
-- CI database/Redis integration (services are not wired into
-  `.github/workflows/ci.yml` yet)
-- Stale ADR-008 documentation update (references a minting mechanism that
-  was superseded by the capability/issuance design in
-  `atp_domain.intents`)
+- ✅ Resolved: ADR-008's documentation update - it now names the actual
+  current minting call site (`atp_exec_paper.gateway.mint_intent_for_decision`,
+  `atp_domain.intents`) instead of the superseded mechanism it previously
+  described.
 - Revisit Docker hardening (`cap_drop`, `read_only`) once runnable
   application containers exist
 - Three columns required by docs/schemas/ still have no field on their

@@ -18,8 +18,21 @@ Introduce a fourth typed artifact between `RiskDecision` and the broker:
 TradeProposal -> RiskDecision -> ApprovedOrderIntent -> BrokerExecutionPort.submit()
 ```
 
-- `ApprovedOrderIntent` is minted **only** inside `atp_domain.risk.engine`,
-  and only from a `RiskDecision` whose outcome is `APPROVED`.
+- `ApprovedOrderIntent` is minted **only** by code holding a `MintingCapability`
+  (`atp_domain.intents`), and only from a `RiskDecision` whose outcome is
+  `APPROVED`. `MintingCapability` cannot be constructed directly -
+  `issue_minting_capability()` is the sole factory, it succeeds *at most
+  once per process*, and `atp_domain.risk.engine` is the only module that
+  ever calls it, at import time, holding the single resulting capability
+  in a module-private variable for the process's lifetime.
+  `mint_approved_order_intent` (also in `atp_domain.intents`) requires that
+  capability as an argument - not stored on the returned intent (an
+  `InitVar`, absent from equality/repr/`dataclasses.replace`) - so
+  presenting anything other than the one real instance fails the
+  `isinstance` check. This is an in-process architectural boundary, not a
+  cryptographic one: it defends against ordinary code elsewhere in the
+  domain accidentally or casually constructing an intent, not against a
+  determined actor rewriting `atp_domain.intents`'s own source.
 - It is **single-use** (`UNIQUE(decision_id)` in the paper schema; the same
   constraint pattern applies to `live` when that schema is populated) and
   **short-TTL** (default 30s), so a stale or replayed intent cannot be
@@ -29,10 +42,15 @@ TradeProposal -> RiskDecision -> ApprovedOrderIntent -> BrokerExecutionPort.subm
   no other parameter. An adapter cannot accept "arbitrary order parameters"
   because its method signature has nowhere to put them — this is enforced
   by the type system, not by the adapter's internal discipline.
-- Minting is restricted at three layers: a module-private factory function,
-  an import-linter contract forbidding every package except
-  `atp_domain.risk.engine` from importing it, and a dedicated test
-  (`test_approved_intent_minted_only_by_risk_engine`).
+- Minting is restricted at three layers: the capability/issuance mechanism
+  above, `tests/unit/domain/test_intents.py`'s direct proofs of it
+  (`test_minting_capability_cannot_be_constructed_directly`,
+  `test_mint_function_rejects_a_forged_capability_lookalike`, and others),
+  and `tests/safety/test_no_execution_path_in_atp_exec_paper.py::
+  test_atp_exec_paper_never_imports_the_low_level_minting_primitives`,
+  which proves the one real call site outside `atp_domain.risk.engine`
+  itself (`atp_exec_paper.gateway`, below) never imports the primitives
+  needed to mint one directly.
 - **No implementation of `BrokerExecutionPort` exists in Phase 1.** No
   `execution/live/` package is created. `atp_exec_paper` (Phase 1 Step 9,
   ADR-011) exercises the identical `TradeProposal -> RiskDecision -> intent`

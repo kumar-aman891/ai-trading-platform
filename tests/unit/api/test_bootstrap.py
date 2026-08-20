@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+import atp_api.bootstrap as bootstrap_module
 from atp_api.bootstrap import (
     BootstrapAlreadyCompletedError,
     BootstrapNotConfiguredError,
@@ -118,3 +119,35 @@ def test_bootstrap_refuses_to_run_a_second_time_even_with_the_correct_token() ->
         assert await uow.users.count() == 1
 
     asyncio.run(run())
+
+
+def test_main_translates_a_bootstrap_error_into_a_clean_system_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`main()`'s `except BootstrapError` -> `SystemExit(str(exc))`
+    translation, proven without Docker or a real database. `main()` can
+    only reach a real `BootstrapAlreadyCompletedError` by way of an actual
+    `core.users` row, which needs Postgres - so this replaces the existing
+    module-level `_run` (not a new abstraction) with a stub that raises
+    the exact exception a real second invocation would, isolating the
+    translation itself from the database round trip
+    `tests/integration/db/test_bootstrap_subprocess.py` already covers
+    end-to-end."""
+    monkeypatch.setenv("SESSION_SECRET_KEY", "a" * 40)
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://nobody:nothing@127.0.0.1:1/nowhere")
+    monkeypatch.setenv("REDIS_URL", "redis://:nothing@127.0.0.1:1/0")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_TOKEN", "t")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_USERNAME", "root")
+    monkeypatch.setenv("BOOTSTRAP_ADMIN_PASSWORD", "a genuinely strong bootstrap password")
+
+    async def _fake_run(**_kwargs: object) -> None:
+        raise BootstrapAlreadyCompletedError(
+            "core.users already has at least one row; bootstrap has already run."
+        )
+
+    monkeypatch.setattr(bootstrap_module, "_run", _fake_run)
+
+    with pytest.raises(SystemExit) as exc_info:
+        bootstrap_module.main()
+
+    assert "already run" in str(exc_info.value)

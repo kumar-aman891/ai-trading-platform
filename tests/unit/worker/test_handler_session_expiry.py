@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from atp_domain.clock import FrozenClock
 from atp_domain.ids import SequentialIdGenerator
 from atp_persistence.repositories.session_observations import SessionExpiryObservation
+from atp_platform.metrics import PLATFORM_REGISTRY
 from atp_worker.handlers.session_expiry import session_reap_handler
 from tests.unit.worker.fakes import (
     FakeAuditEventRepository,
@@ -114,3 +115,47 @@ def test_session_reap_handles_zero_expired_sessions() -> None:
             id_generator=SequentialIdGenerator(),  # type: ignore[arg-type]
         )
     )  # must not raise
+
+
+def test_session_reap_sets_the_expired_unrevoked_gauge_to_the_observed_count() -> None:
+    """A `Gauge`, not a `Counter` (ADR-013 Section 2, Phase 1 Step 13):
+    `.set()` overwrites, so reading it immediately after this call is safe
+    against the value any earlier test in the same process left behind -
+    no delta/before-after comparison needed, unlike a Counter under a
+    shared registry."""
+    uow, _sessions = _uow(
+        observations=[
+            SessionExpiryObservation("hash-a", _NOW, None),
+            SessionExpiryObservation("hash-b", _NOW, None),
+        ]
+    )
+    job = claimed_job(job_type="SESSION_REAP")
+
+    asyncio.run(
+        session_reap_handler(
+            uow,
+            job,
+            clock=FrozenClock(_NOW),
+            id_generator=SequentialIdGenerator(),  # type: ignore[arg-type]
+        )
+    )
+
+    value = PLATFORM_REGISTRY.get_sample_value("atp_worker_session_reap_expired_unrevoked_count")
+    assert value == 2.0
+
+
+def test_session_reap_sets_the_gauge_to_zero_not_leaving_a_stale_value() -> None:
+    uow, _sessions = _uow(observations=[])
+    job = claimed_job(job_type="SESSION_REAP")
+
+    asyncio.run(
+        session_reap_handler(
+            uow,
+            job,
+            clock=FrozenClock(_NOW),
+            id_generator=SequentialIdGenerator(),  # type: ignore[arg-type]
+        )
+    )
+
+    value = PLATFORM_REGISTRY.get_sample_value("atp_worker_session_reap_expired_unrevoked_count")
+    assert value == 0.0

@@ -103,21 +103,19 @@ it against; revisit once real job volume exists.
 **`SESSION_REAP`** — **observation only**. Counts sessions matching
 `expires_at < now() AND revoked_at IS NULL` using only the three granted
 columns, and emits one structured log line plus a metric
-(`atp_worker.session_reap.expired_unrevoked_count`). **No state change, no
-audit event.**
+(`atp_worker_session_reap_expired_unrevoked_count` — underscored, not the
+dotted form this ADR originally wrote; Prometheus metric names are
+conventionally `[a-zA-Z_:][a-zA-Z0-9_:]*`, and the underscored form is
+what that prose always meant). **No state change, no audit event.**
 
-*Metric emission is deferred, explicitly (Step 12 Phase B implementation
-review).* The structured log line ships in Phase B; the named counter does
-not. `platform/src/atp_platform/metrics.py` provides registry factory
-primitives only and its own docstring records that no Phase 1 service
-emits a concrete metric yet — "the `/metrics` route and the first real
-counters are Phase 1 Step 13+". Registering this platform's first-ever
-concrete counter from inside a worker handler would contradict that
-sequencing and put the first metric on a surface with no route to scrape
-it. The metric name above is fixed by this ADR and is wired in the step
-that turns metrics on; until then `SESSION_REAP`'s observation is
-available in structured logs only. This is a deferral of *emission*, not a
-weakening of the observation-only decision below. `core.sessions` is never written by this job type, this
+*Metric emission is implemented (Phase 1 Step 13, observability
+foundation — `atp_worker.handlers.session_expiry`).* It is a `Gauge`, set
+on every run including zero, not a `Counter`: the value legitimately goes
+up and down between runs, and a stalled stale value is itself the signal
+that the job stopped running. `GET /metrics`
+(`atp_api.routers.metrics`) reads `platform/src/atp_platform/metrics.py`'s
+`PLATFORM_REGISTRY`, which the same Step also gained a `gauge()` factory
+for. `core.sessions` is never written by this job type, this
 process, or any future job type added under this name — a security
 boundary, not an implementation gap. This corrects `session.md`'s wording
 (§6). There is no security exposure this leaves open:

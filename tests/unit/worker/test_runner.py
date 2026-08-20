@@ -29,6 +29,7 @@ import pytest
 from atp_domain.clock import FrozenClock
 from atp_domain.ids import SequentialIdGenerator
 from atp_persistence.repositories.jobs import ExpiredLease
+from atp_platform.metrics import PLATFORM_REGISTRY
 from atp_worker.errors import HandlerFailedError, NoHandlerRegisteredError
 from atp_worker.runner import (
     BACKOFF_BASE_SECONDS,
@@ -531,3 +532,64 @@ def test_run_poll_loop_with_zero_max_iterations_does_nothing() -> None:
 
     assert jobs.claim_calls == []
     assert factory.events == []
+
+
+# --- job-outcome metric (Phase 1 Step 13, observability foundation) -----
+
+
+def _job_outcome_total(*, job_type: str, outcome: str) -> float:
+    """`PLATFORM_REGISTRY` is a process-wide singleton the whole test
+    suite shares, so a Counter's absolute value is order-dependent -
+    every test here reads it before and after its own action and asserts
+    the *delta*, never the absolute value, to stay independent of
+    whatever earlier tests already incremented."""
+    return (
+        PLATFORM_REGISTRY.get_sample_value(
+            "atp_worker_job_outcomes_total", {"job_type": job_type, "outcome": outcome}
+        )
+        or 0.0
+    )
+
+
+def test_run_once_increments_the_succeeded_outcome_counter() -> None:
+    job = claimed_job(job_type="RETENTION")
+    factory, _jobs, handler = _wire(claimable=[job])
+    succeeded_before = _job_outcome_total(job_type="RETENTION", outcome="succeeded")
+    failed_before = _job_outcome_total(job_type="RETENTION", outcome="failed")
+
+    asyncio.run(
+        run_once(
+            factory,  # type: ignore[arg-type]
+            clock=FrozenClock(_NOW),
+            id_generator=SequentialIdGenerator(),
+            instance_id=_INSTANCE,
+            registry={job.job_type: handler},  # type: ignore[dict-item]
+        )
+    )
+
+    assert _job_outcome_total(job_type="RETENTION", outcome="succeeded") - succeeded_before == 1.0
+    # The failed counter for this same job_type must not also have moved.
+    assert _job_outcome_total(job_type="RETENTION", outcome="failed") == failed_before
+
+
+def test_run_once_increments_the_failed_outcome_counter_on_an_unknown_job_type() -> None:
+    """Reuses the same unreachable-in-production path
+    `test_unknown_job_type_fails_immediately_without_retry` already
+    exercises - simplest reliable way to force the `except` branch
+    without depending on `RecordingHandler`'s `raises` behavior."""
+    job = claimed_job(job_type="AUDIT_INTEGRITY_CHECK")
+    factory, _jobs, _handler = _wire(claimable=[job])
+    before = _job_outcome_total(job_type="AUDIT_INTEGRITY_CHECK", outcome="failed")
+
+    asyncio.run(
+        run_once(
+            factory,  # type: ignore[arg-type]
+            clock=FrozenClock(_NOW),
+            id_generator=SequentialIdGenerator(),
+            instance_id=_INSTANCE,
+            registry={},  # no handler registered for any job_type
+        )
+    )
+
+    after = _job_outcome_total(job_type="AUDIT_INTEGRITY_CHECK", outcome="failed")
+    assert after - before == 1.0

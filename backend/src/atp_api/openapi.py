@@ -20,6 +20,7 @@ API_DESCRIPTION = (
 
 OPENAPI_TAGS: list[dict[str, str]] = [
     {"name": "health", "description": "Process liveness and dependency readiness probes."},
+    {"name": "metrics", "description": "Prometheus scrape endpoint. No request input, no auth."},
     {"name": "system", "description": "Safe, read-only system metadata. No secrets or topology."},
     {
         "name": "kill-switches",

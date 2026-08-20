@@ -46,6 +46,7 @@ from atp_domain.clock import Clock
 from atp_domain.ids import IdGenerator
 from atp_persistence.repositories.jobs import ClaimedJob
 from atp_platform.logging import get_logger
+from atp_platform.metrics import counter
 from atp_platform.redaction import redact_text
 from atp_worker.errors import (
     HandlerFailedError,
@@ -57,6 +58,19 @@ from atp_worker.registry import HANDLER_REGISTRY, JobHandler
 from atp_worker.uow import UnitOfWorkFactory
 
 _logger = get_logger("atp_worker.runner")
+
+#: Phase 1 Step 13 (observability foundation). One increment per `job_type`
+#: per outcome, at the same two branches `run_once` already logs
+#: `job_succeeded`/`job_failed` from - no new decision point, just the
+#: existing one also moving a counter. `job_type` is bounded to the three
+#: values `core.job_queue`'s `valid_job_type` CHECK constraint allows
+#: (safety invariant #17 asserts this bidirectionally), and `outcome` to
+#: two - both fixed, low-cardinality label sets.
+_JOB_OUTCOMES = counter(
+    "atp_worker_job_outcomes_total",
+    "Jobs run_once has finished, by job_type and outcome (ADR-013 Section 3).",
+    labelnames=("job_type", "outcome"),
+)
 
 #: ADR-013 §6. Overridden per-process via ATP_WORKER_POLL_INTERVAL_SECONDS
 #: by the entrypoint (a later step), never read from the environment here.
@@ -242,6 +256,7 @@ async def run_once(
             retryable=_is_retryable(exc),
             error=format_last_error(exc),
         )
+        _JOB_OUTCOMES.labels(job_type=job.job_type, outcome="failed").inc()
         await _record_failure(
             uow_factory,
             job_id=job.job_id,
@@ -252,6 +267,7 @@ async def run_once(
         )
     else:
         _logger.info("job_succeeded", job_id=job.job_id, job_type=job.job_type)
+        _JOB_OUTCOMES.labels(job_type=job.job_type, outcome="succeeded").inc()
     return True
 
 

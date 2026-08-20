@@ -45,7 +45,8 @@ def test_versioned_api_routes_are_all_under_api_v1(settings: Settings) -> None:
     versioned = [
         path
         for path in _all_route_paths(settings)
-        if path not in ("/healthz", "/readyz", "/docs", "/openapi.json", "/openapi.json/")
+        if path
+        not in ("/healthz", "/readyz", "/metrics", "/docs", "/openapi.json", "/openapi.json/")
         and not path.startswith("/docs")
         and not path.startswith("/openapi")
     ]
@@ -57,6 +58,19 @@ def test_health_routes_exist_and_are_unversioned(settings: Settings) -> None:
     paths = _all_route_paths(settings)
     assert "/healthz" in paths
     assert "/readyz" in paths
+
+
+def test_metrics_route_exists_and_is_unversioned(settings: Settings) -> None:
+    """`/metrics` (Phase 1 Step 13) joins `/healthz`/`/readyz` as an
+    infrastructure-facing, unversioned route - not part of `/api/v1`."""
+    app = create_app(settings=settings)
+    metrics_routes = [
+        route for route in app.routes if hasattr(route, "path") and route.path == "/metrics"
+    ]
+    assert metrics_routes, "expected a GET /metrics route"
+    for route in metrics_routes:
+        methods = getattr(route, "methods", set())
+        assert methods <= {"GET", "HEAD"}
 
 
 def test_system_status_route_exists(settings: Settings) -> None:

@@ -281,35 +281,17 @@ step," not a literal promise about which step number will do it.
 
 ## Known follow-ups
 
-- No password-change route exists yet - a bootstrap admin's
-  `must_change_password=True` is surfaced in `GET /api/v1/auth/me` but
-  nothing yet lets them act on it. `POST /api/v1/paper/proposals` (Step 10)
-  is the first mutation route beyond login/logout, so this is no longer
-  blocked on "no mutation route exists" - just not yet built.
-- `tests/safety/README.md`'s Step 10 reconciliation found two invariants
-  genuinely still missing (not merely mislabeled): #3
-  (`test_no_foreign_key_crosses_mode_schemas` - no test exists; trivially
-  true today only because `live` holds zero tables) and #8
-  (`test_secret_never_appears_in_logs` - only the redaction *function* is
-  unit-tested, not the actual structlog pipeline end to end).
-- `GET /api/v1/paper/proposals`'s list view calls
-  `risk_decisions.get_by_proposal`/`orders.get_by_proposal`/
-  `fills.list_by_order` once per returned proposal (`paper_ledger.list_proposals`)
-  - an N+1 query pattern, acceptable at Phase 1's scale (`DEFAULT_PAGE_SIZE
-  = 50`) but a candidate for a joined/batched read if the ledger ever needs
-  to page through significantly more rows.
 - `paper.trade_proposals.strategy_id`/`source_signal_id` remain unset by
   intake (always `None`) - Step 10 intentionally does not pre-empt the
   still-nonexistent strategy/signal engine; those columns attach later with
   no migration once one exists.
-- Rate limiting for login remains in-process/in-memory
-  (`ApiSettings.login_rate_limit_*`), same single-process caveat as the
-  Step 7 general limiter.
-- `atp_api.bootstrap`'s CLI entrypoint (`python -m atp_api.bootstrap`) has
-  not been exercised as an actual subprocess invocation in this
-  environment - only `bootstrap_admin()` itself (unit-tested against a
-  fake `UnitOfWork`) and, when Docker is available,
-  `tests/integration/db/test_auth_flows.py`'s direct async call.
+- ✅ Resolved (Phase 1 Step 18): `atp_api.bootstrap`'s CLI entrypoint
+  (`python -m atp_api.bootstrap`) is now exercised as a real subprocess
+  invocation against a real, migrated database -
+  `tests/integration/db/test_bootstrap_subprocess.py` proves the first
+  invocation succeeds and creates the administrator, a second invocation
+  fails with no duplicate, and missing `BOOTSTRAP_ADMIN_*` env vars exit
+  non-zero with the documented message and no traceback.
 - Actual Docker integration validation (`docker compose config`,
   startup/health, the full `tests/integration/db/` suite) - none of this
   has run against a real database in this environment
@@ -358,10 +340,6 @@ step," not a literal promise about which step number will do it.
 - `backend/src/atp_api/main.py`'s `uvicorn.run` entrypoint has not been
   exercised end-to-end (no port actually bound/served in this
   environment) - only `create_app()` + `TestClient` were exercised.
-- Rate limiting is in-process, in-memory only (Step 7 scope) - not shared
-  across multiple `atp_api` worker processes; a Redis-backed
-  `RateLimiter` implementation is deferred, per the Step 7 task's own
-  scope note.
 
 ## Step 11 - verification harness integrity
 

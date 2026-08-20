@@ -28,6 +28,18 @@ are real Postgres `uuid` columns, not free text). `strategy_id` is
 *derived*, never stored: `uuid.uuid5(_STRATEGY_NAMESPACE, strategy_key)`
 always produces the same UUID for the same key, on every process
 restart, with no registry table and no migration.
+
+**Amendment (Strategy Framework Milestone 2C):** `ProposedTrade` no
+longer carries `client_request_id`. Idempotency is a platform guarantee,
+not a strategy one - a strategy returning a fresh value each cycle could
+never be deduplicated by `paper.trade_proposals`'
+`UNIQUE(client_request_id)` constraint, and `atp_strategy` holds no
+`SELECT` grant on that table to detect a collision itself (ADR-015).
+`atp_strategy.proposals.derive_client_request_id` now derives it
+deterministically from `(strategy_key, strategy_version, cycle_epoch,
+instrument_id, ordinal)` in the runner layer, after `evaluate()` returns -
+the strategy decides *what* to trade; the platform decides *how that is
+deduplicated*.
 """
 
 from __future__ import annotations
@@ -104,9 +116,11 @@ class StrategyContext:
 @dataclass(frozen=True, slots=True)
 class ProposedTrade:
     """What a strategy decides - deliberately not a `TradeProposal`. It
-    carries no `proposal_id`/`created_at`/`created_by` (infra-assigned
-    fields); a future runner converts one of these into a real
-    `TradeProposal` through the existing intake path (ADR-012)."""
+    carries no `proposal_id`/`created_at`/`created_by`/`client_request_id`
+    (infra-assigned fields - `client_request_id` moved to runner-derived
+    per the Milestone 2C amendment above); a runner converts one of these
+    into a real `TradeProposal` through the existing intake path
+    (ADR-012)."""
 
     instrument_id: InstrumentId
     side: Side
@@ -114,7 +128,6 @@ class ProposedTrade:
     order_type: OrderType
     limit_price: Price | None
     product: Product
-    client_request_id: str
     expected_risk: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
     def __post_init__(self) -> None:

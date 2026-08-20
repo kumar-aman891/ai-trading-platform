@@ -5,7 +5,11 @@ proves the class's attribute surface, not its runtime I/O behavior."""
 
 from __future__ import annotations
 
-from atp_strategy.uow import StrategyUnitOfWork, strategy_unit_of_work
+from atp_strategy.uow import (
+    StrategyUnitOfWork,
+    strategy_unit_of_work,
+    strategy_unit_of_work_factory,
+)
 
 
 def test_strategy_unit_of_work_exposes_exactly_the_approved_repositories() -> None:
@@ -28,3 +32,15 @@ def test_strategy_unit_of_work_does_not_subclass_the_shared_unit_of_work() -> No
 
 def test_strategy_unit_of_work_context_manager_is_exported() -> None:
     assert callable(strategy_unit_of_work)
+
+
+def test_strategy_unit_of_work_factory_binds_a_zero_argument_callable() -> None:
+    """ADR-016/Milestone 2C: `atp_strategy.runner` depends on a
+    zero-argument `UnitOfWorkFactory`, not a raw `session_factory` -
+    mirrors `atp_worker.uow.worker_unit_of_work_factory` exactly."""
+
+    def fake_session_factory() -> None:  # never actually called here
+        raise AssertionError("should not be invoked by this test")
+
+    uow_factory = strategy_unit_of_work_factory(fake_session_factory)  # type: ignore[arg-type]
+    assert callable(uow_factory)

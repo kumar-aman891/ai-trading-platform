@@ -19,8 +19,9 @@ ADR reopening the boundary this one draws.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from functools import partial
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -68,3 +69,23 @@ async def strategy_unit_of_work(
             raise
         else:
             await uow.commit()
+
+
+#: What `atp_strategy.runner` actually depends on: a zero-argument
+#: callable that opens one new transaction. Naming the seam explicitly
+#: (rather than passing a `session_factory` down and letting each function
+#: reach for `strategy_unit_of_work` itself) is what makes Milestone 2C's
+#: "each proposal gets its own independent transaction" visible in
+#: `runner`'s own signatures, and is what lets every runner-level test
+#: fake the transaction boundary without a real database - mirrors
+#: `atp_worker.uow.UnitOfWorkFactory`/`worker_unit_of_work_factory` exactly.
+UnitOfWorkFactory = Callable[[], AbstractAsyncContextManager[StrategyUnitOfWork]]
+
+
+def strategy_unit_of_work_factory(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> UnitOfWorkFactory:
+    """Binds a `session_factory` into the zero-argument
+    `UnitOfWorkFactory` `runner` expects. The one wiring point a process
+    entrypoint needs."""
+    return partial(strategy_unit_of_work, session_factory)

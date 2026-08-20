@@ -97,6 +97,16 @@ inputs (market data, instrument lookup, `as_of`) before constructing
 the context; `evaluate()`'s signature never changes when a fixture data
 source is swapped for a real one.
 
+**Amendment (Milestone 2C).** `ProposedTrade` does **not** carry a
+`client_request_id` field. Idempotency is a platform guarantee, not a
+strategy one: `atp_strategy` holds no `SELECT` grant on
+`paper.trade_proposals` (ADR-015) to detect its own duplicates, so a
+strategy-supplied key could never be safely deduplicated by the caller.
+`atp_strategy.proposals.derive_client_request_id` derives it
+deterministically instead, from `(strategy_key, strategy_version,
+cycle_epoch, instrument_id, ordinal)`, after `evaluate()` returns — see
+Milestone 2C's own design notes for the exact quantization.
+
 `StrategyContext.instruments` is typed against a **domain-owned**
 `InstrumentSnapshot` (identity, symbol, lot size, tick size) rather than
 `atp_persistence.repositories.instruments.InstrumentSnapshot` — fact 3

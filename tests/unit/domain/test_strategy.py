@@ -65,7 +65,6 @@ def _make_proposed_trade(**overrides: object) -> ProposedTrade:
         "order_type": OrderType.MARKET,
         "limit_price": None,
         "product": Product.CNC,
-        "client_request_id": "strategy-req-1",
     }
     defaults.update(overrides)
     return ProposedTrade(**defaults)  # type: ignore[arg-type]

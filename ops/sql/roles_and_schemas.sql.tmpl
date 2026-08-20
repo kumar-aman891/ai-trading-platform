@@ -17,6 +17,11 @@
 --   atp_api         - atp_api service (backend/).
 --   atp_paper_exec  - atp_exec_paper service (execution/paper/).
 --   atp_worker      - atp_worker service (workers/).
+--   atp_strategy    - atp_strategy service (strategy/, Milestone 2B, ADR-014/
+--                     ADR-015). Deliberately holds no default privileges
+--                     (see step 5 below) - its table-level grants are added
+--                     explicitly by migration 0006, table by table, so a
+--                     future table never silently becomes reachable to it.
 --
 -- No atp_exec_live / LIVE role exists (ADR-005, ADR-008) - there is no LIVE
 -- execution service in Phase 1 for such a role to belong to.
@@ -56,6 +61,9 @@ BEGIN
     IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'atp_worker') THEN
         CREATE ROLE atp_worker LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
     END IF;
+    IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'atp_strategy') THEN
+        CREATE ROLE atp_strategy LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOBYPASSRLS;
+    END IF;
 END
 $$;
 
@@ -65,6 +73,7 @@ ALTER ROLE atp_owner WITH PASSWORD :'atp_owner_password';
 ALTER ROLE atp_api WITH PASSWORD :'atp_api_password';
 ALTER ROLE atp_paper_exec WITH PASSWORD :'atp_paper_exec_password';
 ALTER ROLE atp_worker WITH PASSWORD :'atp_worker_password';
+ALTER ROLE atp_strategy WITH PASSWORD :'atp_strategy_password';
 
 -- ---------------------------------------------------------------------------
 -- 2. Database-level hardening - revoke PUBLIC's default grants, connect
@@ -75,7 +84,7 @@ ALTER ROLE atp_worker WITH PASSWORD :'atp_worker_password';
 REVOKE ALL ON DATABASE :"atp_database" FROM PUBLIC;
 REVOKE ALL ON SCHEMA public FROM PUBLIC;
 
-GRANT CONNECT ON DATABASE :"atp_database" TO atp_owner, atp_api, atp_paper_exec, atp_worker;
+GRANT CONNECT ON DATABASE :"atp_database" TO atp_owner, atp_api, atp_paper_exec, atp_worker, atp_strategy;
 
 ALTER DATABASE :"atp_database" OWNER TO atp_owner;
 
@@ -97,11 +106,14 @@ CREATE SCHEMA IF NOT EXISTS live AUTHORIZATION atp_owner;
 -- Phase 1 application role (ADR-005 §5.4/§6).
 -- ---------------------------------------------------------------------------
 
-GRANT USAGE ON SCHEMA core TO atp_api, atp_paper_exec, atp_worker;
-GRANT USAGE ON SCHEMA audit TO atp_api, atp_paper_exec, atp_worker;
-GRANT USAGE ON SCHEMA paper TO atp_api, atp_paper_exec;
+GRANT USAGE ON SCHEMA core TO atp_api, atp_paper_exec, atp_worker, atp_strategy;
+GRANT USAGE ON SCHEMA audit TO atp_api, atp_paper_exec, atp_worker, atp_strategy;
+GRANT USAGE ON SCHEMA paper TO atp_api, atp_paper_exec, atp_strategy;
 -- atp_worker deliberately receives no USAGE on `paper` - no order-path
 -- privileges of any kind (security/THREAT_MODEL.md trust boundaries).
+-- atp_strategy receives USAGE on all three schemas but, unlike every other
+-- role, no ALTER DEFAULT PRIVILEGES entry below - its table-level access is
+-- granted explicitly, table by table, by migration 0006 (ADR-014/ADR-015).
 
 -- ---------------------------------------------------------------------------
 -- 5. Default privileges for tables atp_owner creates later (Step 6+

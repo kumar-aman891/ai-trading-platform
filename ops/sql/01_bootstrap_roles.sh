@@ -19,6 +19,7 @@ set -eu
 : "${ATP_API_PASSWORD:?ATP_API_PASSWORD must be set}"
 : "${ATP_PAPER_EXEC_PASSWORD:?ATP_PAPER_EXEC_PASSWORD must be set}"
 : "${ATP_WORKER_PASSWORD:?ATP_WORKER_PASSWORD must be set}"
+: "${ATP_STRATEGY_PASSWORD:?ATP_STRATEGY_PASSWORD must be set}"
 
 psql -v ON_ERROR_STOP=1 \
     --username "$POSTGRES_USER" \
@@ -28,4 +29,5 @@ psql -v ON_ERROR_STOP=1 \
     -v atp_api_password="$ATP_API_PASSWORD" \
     -v atp_paper_exec_password="$ATP_PAPER_EXEC_PASSWORD" \
     -v atp_worker_password="$ATP_WORKER_PASSWORD" \
+    -v atp_strategy_password="$ATP_STRATEGY_PASSWORD" \
     -f "$(dirname "$0")/roles_and_schemas.sql.tmpl"

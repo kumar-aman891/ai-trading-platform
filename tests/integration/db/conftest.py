@@ -41,6 +41,7 @@ DSN_ENV_VARS = {
     "api": "TEST_ATP_API_DSN",
     "paper_exec": "TEST_ATP_PAPER_EXEC_DSN",
     "worker": "TEST_ATP_WORKER_DSN",
+    "strategy": "TEST_ATP_STRATEGY_DSN",
 }
 REDIS_URL_ENV_VAR = "TEST_REDIS_URL"
 
@@ -99,6 +100,11 @@ def paper_exec_dsn() -> str:
 @pytest.fixture(scope="session")
 def worker_dsn() -> str:
     return _require_dsn(DSN_ENV_VARS["worker"])
+
+
+@pytest.fixture(scope="session")
+def strategy_dsn() -> str:
+    return _require_dsn(DSN_ENV_VARS["strategy"])
 
 
 @pytest.fixture(scope="session")
@@ -220,6 +226,15 @@ def paper_exec_connection(paper_exec_dsn: str) -> Iterator[psycopg.Connection]:
 @pytest.fixture(scope="session")
 def worker_connection(worker_dsn: str) -> Iterator[psycopg.Connection]:
     conn = _connect(worker_dsn, label="atp_worker")
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+@pytest.fixture(scope="session")
+def strategy_connection(strategy_dsn: str) -> Iterator[psycopg.Connection]:
+    conn = _connect(strategy_dsn, label="atp_strategy")
     try:
         yield conn
     finally:

@@ -20,6 +20,7 @@ services:
       ATP_API_PASSWORD: ${ATP_API_PASSWORD:?ATP_API_PASSWORD must be set}
       ATP_PAPER_EXEC_PASSWORD: ${ATP_PAPER_EXEC_PASSWORD:?ATP_PAPER_EXEC_PASSWORD must be set}
       ATP_WORKER_PASSWORD: ${ATP_WORKER_PASSWORD:?ATP_WORKER_PASSWORD must be set}
+      ATP_STRATEGY_PASSWORD: ${ATP_STRATEGY_PASSWORD:?ATP_STRATEGY_PASSWORD must be set}
     volumes:
       - ./ops/sql:/docker-entrypoint-initdb.d:ro
     networks:
@@ -66,6 +67,7 @@ services:
       TEST_ATP_API_DSN: ${TEST_ATP_API_DSN:?TEST_ATP_API_DSN must be set}
       TEST_ATP_PAPER_EXEC_DSN: ${TEST_ATP_PAPER_EXEC_DSN:?TEST_ATP_PAPER_EXEC_DSN must be set}
       TEST_ATP_WORKER_DSN: ${TEST_ATP_WORKER_DSN:?TEST_ATP_WORKER_DSN must be set}
+      TEST_ATP_STRATEGY_DSN: ${TEST_ATP_STRATEGY_DSN:?TEST_ATP_STRATEGY_DSN must be set}
       TEST_REDIS_URL: ${TEST_REDIS_URL:?TEST_REDIS_URL must be set}
     networks:
       - atp_test_internal

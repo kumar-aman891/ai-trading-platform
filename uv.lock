@@ -15,6 +15,7 @@ members = [
     "atp-exec-paper",
     "atp-persistence",
     "atp-platform",
+    "atp-strategy",
     "atp-worker",
 ]
 
@@ -283,6 +284,23 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.9" },
     { name = "pydantic-settings", specifier = ">=2.5" },
     { name = "structlog", specifier = ">=24.4" },
+]
+
+[[package]]
+name = "atp-strategy"
+version = "0.1.0"
+source = { editable = "strategy" }
+dependencies = [
+    { name = "atp-domain" },
+    { name = "atp-persistence" },
+    { name = "atp-platform" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atp-domain", editable = "domain" },
+    { name = "atp-persistence", editable = "persistence" },
+    { name = "atp-platform", editable = "platform" },
 ]
 
 [[package]]

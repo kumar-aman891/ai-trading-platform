@@ -51,4 +51,11 @@ original plan could not have named in advance.
 
 | 18 | `GLOBAL_LIVE`/`LIVE_ACCOUNT` have no mutation route in Phase 1 | ✅ implemented (`test_kill_switch_mutation_boundary.py`, Phase 1 Step 14, ADR-007) — structural: `atp_domain.killswitch.MUTABLE_SWITCH_SCOPES`, the single source of truth `atp_api.services.kill_switches` consults before any write, excludes both scopes by construction; behavioral: a real HTTP request through the fully-wired app, as `administrator` (the strongest role, holding both `ENGAGE_KILL_SWITCH` and `DISENGAGE_KILL_SWITCH`), against both switches and both verbs, is rejected 403 — also asserted in `tests/unit/api/test_routing.py`'s and `tests/safety/test_no_execution_path_in_api.py`'s existing sanctioned-mutating-route allow-lists, extended to the two new routes by path only (which cannot itself express the per-`switch_id` rejection this row proves) |
 
+**Update (Strategy Framework Milestone 2B, ADR-014/ADR-015):** row #19
+below is a repo-added invariant, added for the same reason #17/#18 each
+were - a new capability (`atp_strategy`) introduced a boundary the
+original plan could not have named in advance.
+
+| 19 | `atp_strategy` cannot reach an order execution path, and its `StrategyUnitOfWork` cannot expose a repository this role holds no grant on | ✅ implemented (`test_no_execution_path_in_strategy.py`, Milestone 2B, ADR-014 §G) — AST import scan proves `atp_strategy` imports neither `atp_exec_paper` nor `atp_api` at all, and neither `atp_domain.intents`, `atp_domain.risk.engine`, nor `atp_persistence.models.paper` specifically, and no broker/LLM module (none exist yet); signature inspection over every public function `atp_strategy` defines proves none accepts a raw symbol/quantity/price/side/order-type parameter; `StrategyUnitOfWork.__init__`'s source is inspected directly to prove it exposes exactly `instruments`/`kill_switches`/`trade_proposals`/`audit` and none of `users`/`sessions`/`job_queue`/`orders`/`fills`/`positions`/`cash_ledger`/`order_intents`/`risk_decisions`/`risk_config` |
+
 Every row in this table is now `✅ implemented`.

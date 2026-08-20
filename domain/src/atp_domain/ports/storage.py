@@ -23,14 +23,19 @@ from atp_domain.types import DecisionId, InstrumentId, Mode, OrderId, ProposalId
 class TradeProposalRepository(Protocol):
     """`save` takes a required `created_by` keyword argument beyond the
     domain `TradeProposal` itself - `paper.trade_proposals.created_by` is
-    NOT NULL (docs/schemas/trade_proposal.md) but the Step 4 domain
-    dataclass has no field for it (ADR-009: it is provenance metadata, an
-    application/auth-layer fact, not a business fact any risk rule reads).
-    Corrected to match `SqlAlchemyTradeProposalRepository`'s actual,
-    already-implemented signature now that Phase 1 Step 10 is this
-    Protocol's first production caller (previously a documented Step 6 gap)."""
+    provenance metadata (docs/schemas/trade_proposal.md) but the Step 4
+    domain dataclass has no field for it (ADR-009: an application/auth-layer
+    fact, not a business fact any risk rule reads). Corrected to match
+    `SqlAlchemyTradeProposalRepository`'s actual, already-implemented
+    signature now that Phase 1 Step 10 is this Protocol's first production
+    caller (previously a documented Step 6 gap).
 
-    async def save(self, proposal: TradeProposal, *, created_by: str) -> None: ...
+    `created_by` is `str | None` (ADR-015): `None` identifies a
+    strategy-authored proposal, whose attribution instead lives in
+    `proposal.strategy_id` - the database's `proposal_has_an_author` CHECK
+    requires at least one of the two."""
+
+    async def save(self, proposal: TradeProposal, *, created_by: str | None) -> None: ...
     async def get(self, proposal_id: ProposalId) -> TradeProposal | None: ...
 
 

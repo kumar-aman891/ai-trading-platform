@@ -12,10 +12,13 @@ their Step 4 domain dataclass, because they are application/provenance
 metadata (who did this, or which subsystem produced this row) rather than
 business facts a trading decision needs to reason about:
 
-- `paper.trade_proposals.created_by` (NOT NULL FK to `core.users`) -
+- `paper.trade_proposals.created_by` (nullable FK to `core.users`, ADR-015) -
   `atp_domain.proposals.TradeProposal` does not track who created it; no
   risk rule consults it. The authenticated caller's identity is an
-  API/auth-layer fact, not a domain one.
+  API/auth-layer fact, not a domain one. `created_by` is `NULL` for a
+  strategy-authored proposal (`strategy_id` carries attribution instead);
+  the `proposal_has_an_author` CHECK (migration 0006) requires at least
+  one of the two.
 - `paper.fills.source` (NOT NULL) - `atp_domain.orders.Fill` already
   carries `simulated: bool`; `source` only names which mechanism produced
   the fill, which nothing in `Position.apply_fill` or any risk rule reads.
@@ -86,7 +89,7 @@ from atp_persistence.models.paper import (
 # ---------------------------------------------------------------------------
 
 
-def trade_proposal_to_row(proposal: TradeProposal, *, created_by: str) -> TradeProposalRow:
+def trade_proposal_to_row(proposal: TradeProposal, *, created_by: str | None) -> TradeProposalRow:
     return TradeProposalRow(
         proposal_id=proposal.proposal_id,
         mode=proposal.mode.value,

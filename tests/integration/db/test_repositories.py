@@ -35,6 +35,7 @@ from atp_domain.types import (
     Product,
     ProposalId,
     Side,
+    StrategyId,
 )
 from atp_persistence.db import create_engine, make_session_factory, unit_of_work
 from tests.integration.db.conftest import delete_user_cascade
@@ -111,6 +112,44 @@ def test_trade_proposal_repository_save_and_get_round_trips(
             proposal = _make_proposal(seeded_instrument_id, client_request_id=_new_uuid())
             async with unit_of_work(session_factory) as uow:
                 await uow.trade_proposals.save(proposal, created_by=seeded_user_id)
+
+            async with unit_of_work(session_factory) as uow:
+                fetched = await uow.trade_proposals.get(proposal.proposal_id)
+            assert fetched == proposal
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
+
+
+def test_trade_proposal_repository_save_accepts_none_created_by_with_strategy_id(
+    owner_dsn: str, seeded_instrument_id: str
+) -> None:
+    """ADR-015: a strategy-authored proposal - created_by=None,
+    strategy_id set - round-trips through the real repository/database
+    with no core.users row involved."""
+
+    async def run() -> None:
+        engine = create_engine(_as_async_psycopg_url(owner_dsn))
+        try:
+            session_factory = make_session_factory(engine)
+            proposal = TradeProposal(
+                proposal_id=ProposalId(_new_uuid()),
+                mode=Mode.PAPER,
+                instrument_id=seeded_instrument_id,  # type: ignore[arg-type]
+                side=Side.BUY,
+                quantity=Quantity(Decimal("1")),
+                order_type=OrderType.MARKET,
+                limit_price=None,
+                trigger_price=None,
+                product=Product.CNC,
+                client_request_id=_new_uuid(),
+                created_at=datetime.now(UTC),
+                strategy_id=StrategyId(_new_uuid()),
+                strategy_version=1,
+            )
+            async with unit_of_work(session_factory) as uow:
+                await uow.trade_proposals.save(proposal, created_by=None)
 
             async with unit_of_work(session_factory) as uow:
                 fetched = await uow.trade_proposals.get(proposal.proposal_id)

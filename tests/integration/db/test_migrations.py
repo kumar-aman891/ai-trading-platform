@@ -117,7 +117,7 @@ def test_alembic_version_table_reports_head_after_upgrade(
     with owner_connection.cursor() as cur:
         cur.execute("SELECT version_num FROM core.alembic_version")
         (version,) = cur.fetchone()  # type: ignore[misc]
-        assert version == "0005_job_queue_claim_constraints"
+        assert version == "0006_strategy_proposal_attribution"
 
 
 _JOB_QUEUE_CONSTRAINTS = {
@@ -174,6 +174,60 @@ def test_downgrade_to_0004_then_upgrade_to_0005_restores_job_queue_constraints(
         (version,) = cur.fetchone()  # type: ignore[misc]
     assert version == "0005_job_queue_claim_constraints"
     assert _job_queue_constraint_names(owner_connection) == _JOB_QUEUE_CONSTRAINTS
+
+
+def _trade_proposals_created_by_is_nullable(conn: psycopg.Connection) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT is_nullable FROM information_schema.columns "
+            "WHERE table_schema = 'paper' AND table_name = 'trade_proposals' "
+            "AND column_name = 'created_by'"
+        )
+        (is_nullable,) = cur.fetchone()  # type: ignore[misc]
+    return is_nullable == "YES"
+
+
+def _author_check_exists(conn: psycopg.Connection) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM pg_constraint WHERE conname = "
+            "'ck_trade_proposals_proposal_has_an_author' "
+            "AND conrelid = 'paper.trade_proposals'::regclass"
+        )
+        return cur.fetchone() is not None
+
+
+def test_downgrade_to_0005_then_upgrade_to_0006_restores_proposal_attribution(
+    owner_dsn: str, owner_connection: psycopg.Connection
+) -> None:
+    """ADR-015 / migration 0006: proves both directions of the hand-written
+    ALTER COLUMN / CHECK constraint DDL actually work against a real
+    database, not merely declared - mirrors migration 0005's own up/down
+    proof pattern. Always leaves the database at head, regardless of
+    outcome, so later tests are never stranded on 0005's schema."""
+    sync_url = _as_sync_psycopg_url(owner_dsn)
+    try:
+        down_result = _run_alembic(
+            "downgrade", "0005_job_queue_claim_constraints", sync_url=sync_url
+        )
+        assert down_result.returncode == 0, down_result.stderr
+
+        with psycopg.connect(owner_dsn, connect_timeout=3) as conn:
+            assert _trade_proposals_created_by_is_nullable(conn) is False
+            assert _author_check_exists(conn) is False
+
+        up_result = _run_alembic("upgrade", "head", sync_url=sync_url)
+        assert up_result.returncode == 0, up_result.stderr
+    finally:
+        final_result = _run_alembic("upgrade", "head", sync_url=sync_url)
+        assert final_result.returncode == 0, final_result.stderr
+
+    with owner_connection.cursor() as cur:
+        cur.execute("SELECT version_num FROM core.alembic_version")
+        (version,) = cur.fetchone()  # type: ignore[misc]
+    assert version == "0006_strategy_proposal_attribution"
+    assert _trade_proposals_created_by_is_nullable(owner_connection) is True
+    assert _author_check_exists(owner_connection) is True
 
 
 def test_kill_switch_state_seed_rows_present(

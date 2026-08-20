@@ -47,6 +47,7 @@ from atp_domain.types import (
     ProposalId,
     RiskConfigId,
     Side,
+    StrategyId,
 )
 from atp_persistence import mappers
 
@@ -78,6 +79,36 @@ def test_trade_proposal_round_trip_preserves_decimal_and_timestamps() -> None:
     assert round_tripped.limit_price.value == Decimal("1234.567890")
     assert round_tripped.created_at.tzinfo is not None
     assert round_tripped.mode is Mode.PAPER
+
+
+def test_trade_proposal_to_row_accepts_none_created_by_for_a_strategy_authored_proposal() -> None:
+    """ADR-015: created_by=None is the strategy-authored shape - the
+    database's proposal_has_an_author CHECK (migration 0006), not this
+    mapper, is what enforces strategy_id is present whenever created_by
+    isn't; this test only proves the mapper itself accepts None without
+    raising and round-trips cleanly."""
+    proposal = TradeProposal(
+        proposal_id=ProposalId("11111111-1111-7111-8111-111111111111"),
+        mode=Mode.PAPER,
+        instrument_id=InstrumentId("22222222-2222-7222-8222-222222222222"),
+        side=Side.BUY,
+        quantity=Quantity(Decimal("1")),
+        order_type=OrderType.MARKET,
+        limit_price=None,
+        trigger_price=None,
+        product=Product.CNC,
+        client_request_id="strategy-req-1",
+        created_at=_AWARE_TS,
+        strategy_id=StrategyId("66666666-6666-7666-8666-666666666666"),
+        strategy_version=1,
+    )
+
+    row = mappers.trade_proposal_to_row(proposal, created_by=None)
+
+    assert row.created_by is None
+    assert row.strategy_id == "66666666-6666-7666-8666-666666666666"
+    round_tripped = mappers.row_to_trade_proposal(row)
+    assert round_tripped == proposal
 
 
 def test_risk_decision_round_trip_preserves_rule_results() -> None:

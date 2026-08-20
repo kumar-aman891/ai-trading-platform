@@ -30,7 +30,18 @@ _MODE_CHECK = "mode = 'PAPER'"
 
 
 class TradeProposalRow(Base):
-    """`paper.trade_proposals` (docs/schemas/trade_proposal.md)."""
+    """`paper.trade_proposals` (docs/schemas/trade_proposal.md).
+
+    `created_by` is nullable (ADR-015): a strategy-authored proposal has no
+    `core.users` row to point at - no migration seeds one
+    (docs/schemas/user.md's "no default/seeded user, ever" rule), and no
+    Phase 1 role may read `core.users` except `atp_api`. `created_by`
+    mirrors `core.risk_config.created_by`/`core.kill_switch_state.updated_by`'s
+    existing NULL-for-non-human-actor convention. The `proposal_has_an_author`
+    CHECK is what keeps every row attributable despite the loosened column:
+    a human proposal carries `created_by`, a strategy proposal carries
+    `strategy_id`, and at least one of the two is always required.
+    """
 
     __tablename__ = "trade_proposals"
     __table_args__ = (
@@ -43,6 +54,10 @@ class TradeProposalRow(Base):
             name="limit_price_iff_limit_order",
         ),
         CheckConstraint("product IN ('CNC','MIS')", name="valid_product"),
+        CheckConstraint(
+            "created_by IS NOT NULL OR strategy_id IS NOT NULL",
+            name="proposal_has_an_author",
+        ),
         {"schema": _SCHEMA},
     )
 
@@ -62,7 +77,7 @@ class TradeProposalRow(Base):
     source_signal_id: Mapped[str | None] = uuid_column(nullable=True)
     client_request_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     expected_risk: Mapped[dict[str, object]] = mapped_column(JSONB, nullable=False)
-    created_by: Mapped[str] = mapped_column(ForeignKey("core.users.user_id"), nullable=False)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("core.users.user_id"), nullable=True)
     created_at: Mapped[datetime] = utc_timestamp()
 
 

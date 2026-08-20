@@ -3,11 +3,16 @@
 `save()` takes an additional required `created_by` keyword argument beyond
 the Protocol's bare `(self, proposal) -> None` signature - see the module
 docstring in `atp_persistence.mappers` for why (`paper.trade_proposals.created_by`
-is `NOT NULL` per docs/schemas/trade_proposal.md, but the Step 4 domain
+is provenance metadata, not a domain fact - the Step 4 domain
 `TradeProposal` dataclass has no field for it). This makes the class not a
 strict structural match for the Protocol when called anonymously through
 that type; documented as a known Step 6 gap rather than hidden behind a
 fabricated default value.
+
+`created_by` is `str | None` (ADR-015): `None` for a strategy-authored
+proposal, whose attribution instead lives in `proposal.strategy_id`. The
+database's `proposal_has_an_author` CHECK (migration 0006), not this class,
+is what actually enforces that at least one of the two is always present.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ class SqlAlchemyTradeProposalRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
 
-    async def save(self, proposal: TradeProposal, *, created_by: str) -> None:
+    async def save(self, proposal: TradeProposal, *, created_by: str | None) -> None:
         self._session.add(trade_proposal_to_row(proposal, created_by=created_by))
         await self._session.flush()
 

@@ -265,7 +265,7 @@ class FakeTradeProposalRepository:
             p.client_request_id: p.proposal_id for p in (proposals or [])
         }
 
-    async def save(self, proposal: TradeProposal, *, created_by: str) -> None:
+    async def save(self, proposal: TradeProposal, *, created_by: str | None) -> None:
         if proposal.client_request_id in self._proposal_id_by_client_request_id:
             raise IntegrityError(
                 "INSERT INTO paper.trade_proposals ...",

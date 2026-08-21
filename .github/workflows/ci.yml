@@ -137,6 +137,39 @@ jobs:
             exit 1
           fi
 
+      # Strategy Framework Milestone 2D: the same "green exit code is not
+      # evidence these ran" reasoning as the worker step above applies
+      # identically to the atp_strategy role/runner integration suite -
+      # test_strategy_role_grants.py (Milestone 2B, 17 tests: the role's
+      # full grant/denial matrix) and test_strategy_runner_integration.py
+      # (Milestone 2D, 8 tests: real kill-switch gating, real strategy
+      # evaluation and persistence, the real downstream risk-engine path,
+      # and concurrency/idempotency under `UNIQUE(client_request_id)`).
+      - name: Assert the strategy integration suite executed (and report counts)
+        if: always()
+        run: |
+          if [ ! -f /tmp/integration.log ]; then
+            echo "::error title=integration-diagnostic::/tmp/integration.log does not exist"
+            exit 1
+          fi
+          emit_error() {
+            body="$1"
+            [ -z "$body" ] && return 0
+            escaped=$(printf '%s' "$body" | sed 's/%/%25/g' | sed 's/\r//g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=$2::${escaped}"
+          }
+          summary=$(grep -aE '^=+ .*(passed|failed|error)' /tmp/integration.log | tail -1)
+          strategy_passed=$(grep -acE 'test_strategy_(role_grants|runner_integration)\.py::[]a-zA-Z_./[]+ PASSED' /tmp/integration.log || true)
+          strategy_bad=$(grep -acE 'test_strategy_(role_grants|runner_integration)\.py::[]a-zA-Z_./[]+ (FAILED|ERROR|SKIPPED)' /tmp/integration.log || true)
+          echo "::notice title=integration-counts::${summary} || strategy_passed=${strategy_passed} strategy_not_passed=${strategy_bad}"
+          if [ "${strategy_passed}" -ne 25 ] || [ "${strategy_bad}" -ne 0 ]; then
+            emit_error "expected 25 passed / 0 non-passed across test_strategy_role_grants.py + test_strategy_runner_integration.py, got passed=${strategy_passed} not-passed=${strategy_bad}. Summary: ${summary}" "strategy-suite-did-not-execute"
+            emit_error "$(sed -n '/short test summary info/,$p' /tmp/integration.log | head -c 3500)" "pytest-summary"
+            emit_error "$(grep -anE '^E  |Interrupted|error during collection|ModuleNotFoundError|ImportError' /tmp/integration.log | head -40 | head -c 3500)" "pytest-errors"
+            emit_error "$(tail -60 /tmp/integration.log | head -c 3500)" "log-tail"
+            exit 1
+          fi
+
 
   secret-scan:
     name: Secret scan (gitleaks)

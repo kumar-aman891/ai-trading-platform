@@ -17,6 +17,7 @@ COPY persistence ./persistence
 COPY backend ./backend
 COPY execution ./execution
 COPY workers ./workers
+COPY strategy ./strategy
 COPY tests ./tests
 
 RUN uv sync --all-packages --group dev --frozen

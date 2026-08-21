@@ -121,7 +121,7 @@ def test_system_status_reports_not_degraded_and_a_migration_version(
     body = response.json()
     assert response.status_code == 200
     assert body["degraded"] is False
-    assert body["migration_version"] == "0006_strategy_proposal_attribution"
+    assert body["migration_version"] == "0006_strategy_attribution"
     assert body["mode"] == "PAPER"
 
 

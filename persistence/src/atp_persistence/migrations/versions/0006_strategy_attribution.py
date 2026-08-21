@@ -41,7 +41,7 @@ no access whatsoever to `core.users`, `core.sessions`, `core.job_queue`,
 `core.kill_switch_history`, `paper.orders`/`fills`/`order_intents`/
 `positions`/`cash_ledger`, or the `live` schema.
 
-Revision ID: 0006_strategy_proposal_attribution
+Revision ID: 0006_strategy_attribution
 Revises: 0005_job_queue_claim_constraints
 Create Date: 2026-08-20
 """
@@ -53,7 +53,7 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = "0006_strategy_proposal_attribution"
+revision: str = "0006_strategy_attribution"
 down_revision: str | None = "0005_job_queue_claim_constraints"
 branch_labels: Sequence[str] | str | None = None
 depends_on: Sequence[str] | str | None = None

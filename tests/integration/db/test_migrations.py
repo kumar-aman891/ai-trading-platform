@@ -117,7 +117,7 @@ def test_alembic_version_table_reports_head_after_upgrade(
     with owner_connection.cursor() as cur:
         cur.execute("SELECT version_num FROM core.alembic_version")
         (version,) = cur.fetchone()  # type: ignore[misc]
-        assert version == "0006_strategy_proposal_attribution"
+        assert version == "0006_strategy_attribution"
 
 
 _JOB_QUEUE_CONSTRAINTS = {
@@ -225,7 +225,7 @@ def test_downgrade_to_0005_then_upgrade_to_0006_restores_proposal_attribution(
     with owner_connection.cursor() as cur:
         cur.execute("SELECT version_num FROM core.alembic_version")
         (version,) = cur.fetchone()  # type: ignore[misc]
-    assert version == "0006_strategy_proposal_attribution"
+    assert version == "0006_strategy_attribution"
     assert _trade_proposals_created_by_is_nullable(owner_connection) is True
     assert _author_check_exists(owner_connection) is True
 

@@ -189,7 +189,23 @@ _DELETE_USER_CASCADE_STATEMENTS = (
     # is permitted here.
     "DELETE FROM core.risk_config WHERE created_by = %s",
     "DELETE FROM core.sessions WHERE user_id = %s",
-    "DELETE FROM core.users WHERE user_id = %s",
+    # core.kill_switch_state.updated_by is a nullable FK to core.users, so a
+    # user who flipped a switch cannot simply be deleted. The row itself must
+    # survive (it may be migration-seeded, and it may be pinned by append-only
+    # history), so detach the reference instead of removing the row. Safe
+    # against the `reason_required` CHECK (`updated_by IS NULL OR reason IS
+    # NOT NULL`): clearing `updated_by` satisfies it unconditionally.
+    "UPDATE core.kill_switch_state SET updated_by = NULL WHERE updated_by = %s",
+    # core.kill_switch_history.changed_by is also an FK to core.users - but
+    # that table is append-only, so neither DELETE nor UPDATE can detach it.
+    # A user who has ever recorded a kill-switch transition is therefore
+    # permanently undeletable, by design (ADR-007 + ADR-010): the audit trail
+    # outranks cleanup. Delete the user only when nothing pins them, and leave
+    # them otherwise rather than raising ForeignKeyViolation in teardown.
+    """
+    DELETE FROM core.users WHERE user_id = %s AND NOT EXISTS (
+        SELECT 1 FROM core.kill_switch_history h WHERE h.changed_by = %s)
+    """,
 )
 
 
@@ -214,7 +230,9 @@ def delete_user_cascade(conn: psycopg.Connection, user_id: str) -> None:
     conn.rollback()
     with conn.cursor() as cur:
         for statement in _DELETE_USER_CASCADE_STATEMENTS:
-            cur.execute(statement, (user_id,))
+            # Most statements bind `user_id` once; the final one binds it twice
+            # (once for the row, once for its NOT EXISTS guard).
+            cur.execute(statement, (user_id,) * statement.count("%s"))
     conn.commit()
 
 
@@ -352,4 +370,41 @@ def migrated_database(owner_dsn: str) -> str:
         pytest.fail(
             f"alembic upgrade head failed:\nstdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
+    _capture_post_migration_user_count(owner_dsn)
     return sync_url
+
+
+#: `core.users` row count observed immediately after `alembic upgrade head`,
+#: before any test has run. See `core_users_after_migration`.
+_POST_MIGRATION_USER_COUNT: int | None = None
+
+
+def _capture_post_migration_user_count(owner_dsn: str) -> None:
+    global _POST_MIGRATION_USER_COUNT
+    with psycopg.connect(owner_dsn, connect_timeout=CONNECT_TIMEOUT_SECONDS) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM core.users")
+            (count,) = cur.fetchone()  # type: ignore[misc]
+        _POST_MIGRATION_USER_COUNT = int(count)
+
+
+@pytest.fixture(scope="session")
+def core_users_after_migration(migrated_database: str) -> int:
+    """How many `core.users` rows existed the instant the migration chain
+    finished - i.e. before any test could have created one.
+
+    docs/schemas/user.md's "No default/seeded user in any migration" is a
+    property of the *migrations*, so it must be measured against the database
+    the migrations produced, not against a shared database that later tests
+    have written to. Reading `core.users` mid-session cannot distinguish a
+    migration-seeded user from a test fixture's own leftover - and some
+    leftovers are unavoidable: `core.kill_switch_history.changed_by` is an FK
+    into `core.users` on an append-only table, so any user who has recorded a
+    kill-switch transition is permanently undeletable by design.
+
+    Measuring at migration time is strictly stronger than the count-at-test-
+    time check this replaced: it cannot be satisfied by luck of test ordering,
+    and it cannot be broken by an unrelated fixture."""
+    if _POST_MIGRATION_USER_COUNT is None:  # pragma: no cover - defensive
+        pytest.fail("post-migration core.users count was never captured")
+    return _POST_MIGRATION_USER_COUNT

@@ -51,23 +51,19 @@ def test_bootstrap_config_has_created_by_null(
     assert created_by is None
 
 
-def test_no_seeded_core_users_row_exists(
-    migrated_database: str, owner_connection: psycopg.Connection
-) -> None:
+def test_no_seeded_core_users_row_exists(core_users_after_migration: int) -> None:
     """docs/schemas/user.md: "No default/seeded user in any migration."
-    The risk_config bootstrap fix must not have introduced one."""
-    with owner_connection.cursor() as cur:
-        cur.execute("SELECT username FROM core.users ORDER BY username LIMIT 10")
-        usernames = [row[0] for row in cur.fetchall()]
-    # Names the rows rather than reporting a bare count: every historical
-    # failure of this assertion has been a *test fixture* that leaked its
-    # own `fixture-{uuid}` user (a cleanup teardown that died on an aborted
-    # transaction), not a migration that seeded one - and a count alone
-    # cannot tell those two apart.
-    assert usernames == [], (
-        f"core.users must be empty - docs/schemas/user.md: 'No default/seeded user in any "
-        f"migration.' Found {usernames}; a 'fixture-*' name here means a test fixture leaked "
-        f"its user rather than that a migration seeded one."
+    The risk_config bootstrap fix must not have introduced one.
+
+    Asserted against the count taken the instant `alembic upgrade head`
+    finished, not against `core.users` as it stands mid-session: the claim
+    is about what the migrations create, and a shared database cannot tell a
+    migration-seeded user apart from a test fixture's leftover. See
+    `core_users_after_migration` in conftest for why some leftovers are
+    permanent by design."""
+    assert core_users_after_migration == 0, (
+        f"the migration chain created {core_users_after_migration} core.users row(s); "
+        f"docs/schemas/user.md requires no default/seeded user in any migration"
     )
 
 

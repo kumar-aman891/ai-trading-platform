@@ -109,10 +109,19 @@ jobs:
         if: always()
         run: |
           [ -f /tmp/integration.log ] || exit 0
+          emit_notice() {
+            [ -z "$1" ] && return 0
+            escaped=$(printf '%s' "$1" | sed 's/%/%25/g' | sed 's/\r//g' | awk '{printf "%s%%0A", $0}')
+            echo "::notice title=$2::${escaped}"
+          }
           failures=$(grep -aE '^(FAILED|ERROR) ' /tmp/integration.log | head -40)
           [ -z "$failures" ] && failures="none"
-          escaped=$(printf '%s' "$failures" | sed 's/%/%25/g' | sed 's/\r//g' | awk '{printf "%s%%0A", $0}')
-          echo "::notice title=integration-failing-tests::${escaped}"
+          emit_notice "$failures" "integration-failing-tests"
+          # The assertion/exception detail behind those names - without it
+          # a failing test is only identifiable, not diagnosable, from
+          # outside the repository.
+          detail=$(grep -aE '^E {3,}' /tmp/integration.log | head -60 | cut -c1-200 | head -c 3000)
+          emit_notice "$detail" "integration-failure-detail"
 
       # `make test-integration` exiting 0 is not by itself evidence the
       # worker suite ran - the same reasoning the lifecycle step above

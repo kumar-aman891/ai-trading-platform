@@ -98,6 +98,22 @@ jobs:
           set -o pipefail
           make test-integration 2>&1 | tee /tmp/integration.log
 
+      # The per-suite watchdogs below only emit diagnostics when *they*
+      # fail, so a failure anywhere else in the integration suite is
+      # invisible from outside the repository - GitHub's job-log API
+      # requires admin rights even on a public repo, while check-run
+      # annotations are readable anonymously (see the worker watchdog's
+      # own note below). Emit the failing-test list unconditionally, as a
+      # `notice` so this step never itself changes the job's outcome.
+      - name: Report integration failures (annotation-visible diagnostics)
+        if: always()
+        run: |
+          [ -f /tmp/integration.log ] || exit 0
+          failures=$(grep -aE '^(FAILED|ERROR) ' /tmp/integration.log | head -40)
+          [ -z "$failures" ] && failures="none"
+          escaped=$(printf '%s' "$failures" | sed 's/%/%25/g' | sed 's/\r//g' | awk '{printf "%s%%0A", $0}')
+          echo "::notice title=integration-failing-tests::${escaped}"
+
       # `make test-integration` exiting 0 is not by itself evidence the
       # worker suite ran - the same reasoning the lifecycle step above
       # already applies to its own two tests, and the reason

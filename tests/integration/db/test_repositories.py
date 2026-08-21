@@ -123,18 +123,26 @@ def test_trade_proposal_repository_save_and_get_round_trips(
 
 
 def test_trade_proposal_repository_save_accepts_none_created_by_with_strategy_id(
-    owner_dsn: str, seeded_instrument_id: str
+    owner_dsn: str, owner_connection: psycopg.Connection, seeded_instrument_id: str
 ) -> None:
     """ADR-015: a strategy-authored proposal - created_by=None,
     strategy_id set - round-trips through the real repository/database
-    with no core.users row involved."""
+    with no core.users row involved.
+
+    The row is deleted explicitly rather than left for `delete_user_cascade`:
+    that helper is keyed on `created_by`, so once ADR-015 made the column
+    nullable it became structurally unable to reach a strategy-authored
+    row. A leaked `created_by IS NULL` row is not harmless - it makes every
+    later `alembic downgrade` past 0006 fail at
+    `ALTER COLUMN created_by SET NOT NULL` (found by CI, Milestone 2D)."""
+    proposal_id = _new_uuid()
 
     async def run() -> None:
         engine = create_engine(_as_async_psycopg_url(owner_dsn))
         try:
             session_factory = make_session_factory(engine)
             proposal = TradeProposal(
-                proposal_id=ProposalId(_new_uuid()),
+                proposal_id=ProposalId(proposal_id),
                 mode=Mode.PAPER,
                 instrument_id=seeded_instrument_id,  # type: ignore[arg-type]
                 side=Side.BUY,
@@ -157,7 +165,12 @@ def test_trade_proposal_repository_save_accepts_none_created_by_with_strategy_id
         finally:
             await engine.dispose()
 
-    asyncio.run(run())
+    try:
+        asyncio.run(run())
+    finally:
+        with owner_connection.cursor() as cur:
+            cur.execute("DELETE FROM paper.trade_proposals WHERE proposal_id = %s", (proposal_id,))
+        owner_connection.commit()
 
 
 def test_trade_proposal_repository_get_returns_none_for_unknown_id(owner_dsn: str) -> None:

@@ -187,19 +187,32 @@ def test_trade_proposal_accepts_strategy_authored_row_with_null_created_by(
 ) -> None:
     """ADR-015: `created_by` null, `strategy_id` non-null - the new
     strategy-submission shape - satisfies `proposal_has_an_author` with no
-    `core.users` row involved at all."""
-    with owner_connection.cursor() as cur:
-        cur.execute(
-            """
+    `core.users` row involved at all.
+
+    The row is deleted explicitly rather than left for `delete_user_cascade`:
+    that helper is keyed on `created_by`, so once ADR-015 made the column
+    nullable it became structurally unable to reach a strategy-authored
+    row. A leaked `created_by IS NULL` row is not harmless - it makes every
+    later `alembic downgrade` past 0006 fail at
+    `ALTER COLUMN created_by SET NOT NULL` (found by CI, Milestone 2D)."""
+    proposal_id = _new_uuid()
+    try:
+        with owner_connection.cursor() as cur:
+            cur.execute(
+                """
                 INSERT INTO paper.trade_proposals
                     (proposal_id, mode, instrument_id, side, quantity, order_type,
                      product, client_request_id, expected_risk, created_by, strategy_id,
                      strategy_version, created_at)
                 VALUES (%s, 'PAPER', %s, 'BUY', 1, 'MARKET', 'CNC', %s, '{}', NULL, %s, 1, now())
                 """,
-            (_new_uuid(), seeded_instrument_id, _new_uuid(), _new_uuid()),
-        )
-    owner_connection.commit()
+                (proposal_id, seeded_instrument_id, _new_uuid(), _new_uuid()),
+            )
+        owner_connection.commit()
+    finally:
+        with owner_connection.cursor() as cur:
+            cur.execute("DELETE FROM paper.trade_proposals WHERE proposal_id = %s", (proposal_id,))
+        owner_connection.commit()
 
 
 def test_trade_proposal_rejects_row_with_neither_created_by_nor_strategy_id(

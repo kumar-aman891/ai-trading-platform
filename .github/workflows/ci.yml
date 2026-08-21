@@ -122,6 +122,12 @@ jobs:
           # outside the repository.
           detail=$(grep -aE '^E {3,}' /tmp/integration.log | head -60 | cut -c1-200 | head -c 3000)
           emit_notice "$detail" "integration-failure-detail"
+          # Alembic failures surface as a subprocess stderr blob embedded in
+          # an AssertionError, so the actual cause is far below the first
+          # `E` lines above. Pull the error-bearing lines out specifically.
+          alembic=$(grep -aE '(sqlalchemy\.exc|psycopg\.errors|alembic\.util|FAILED:|ERROR \[alembic)' /tmp/integration.log \
+            | grep -avE 'kill_switch_history is append-only' | head -25 | cut -c1-260 | head -c 3000)
+          emit_notice "$alembic" "integration-alembic-detail"
 
       # `make test-integration` exiting 0 is not by itself evidence the
       # worker suite ran - the same reasoning the lifecycle step above

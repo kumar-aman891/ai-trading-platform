@@ -18,6 +18,16 @@ import psycopg
 
 _PERSISTENCE_DIR = Path(__file__).resolve().parents[3] / "persistence"
 
+#: The current head revision. Declared once and referenced by every
+#: "we are back at head" assertion below: this file previously spelled it
+#: out at each site, and when migration 0006 made head no longer 0005,
+#: `test_downgrade_to_0004_then_upgrade_to_0005_restores_job_queue_constraints`
+#: kept asserting the old literal *after* upgrading to head and silently
+#: became a guaranteed failure (found by CI, Milestone 2D). Downgrade
+#: *targets* below stay written out in full - those name a specific
+#: revision, not whatever head happens to be.
+_HEAD_REVISION = "0006_strategy_attribution"
+
 
 def _as_sync_psycopg_url(dsn: str) -> str:
     if dsn.startswith("postgresql://"):
@@ -117,7 +127,7 @@ def test_alembic_version_table_reports_head_after_upgrade(
     with owner_connection.cursor() as cur:
         cur.execute("SELECT version_num FROM core.alembic_version")
         (version,) = cur.fetchone()  # type: ignore[misc]
-        assert version == "0006_strategy_attribution"
+        assert version == _HEAD_REVISION
 
 
 _JOB_QUEUE_CONSTRAINTS = {
@@ -172,7 +182,7 @@ def test_downgrade_to_0004_then_upgrade_to_0005_restores_job_queue_constraints(
     with owner_connection.cursor() as cur:
         cur.execute("SELECT version_num FROM core.alembic_version")
         (version,) = cur.fetchone()  # type: ignore[misc]
-    assert version == "0005_job_queue_claim_constraints"
+    assert version == _HEAD_REVISION
     assert _job_queue_constraint_names(owner_connection) == _JOB_QUEUE_CONSTRAINTS
 
 
@@ -225,7 +235,7 @@ def test_downgrade_to_0005_then_upgrade_to_0006_restores_proposal_attribution(
     with owner_connection.cursor() as cur:
         cur.execute("SELECT version_num FROM core.alembic_version")
         (version,) = cur.fetchone()  # type: ignore[misc]
-    assert version == "0006_strategy_attribution"
+    assert version == _HEAD_REVISION
     assert _trade_proposals_created_by_is_nullable(owner_connection) is True
     assert _author_check_exists(owner_connection) is True
 

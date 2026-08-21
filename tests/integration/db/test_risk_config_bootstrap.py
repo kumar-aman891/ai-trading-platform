@@ -57,9 +57,18 @@ def test_no_seeded_core_users_row_exists(
     """docs/schemas/user.md: "No default/seeded user in any migration."
     The risk_config bootstrap fix must not have introduced one."""
     with owner_connection.cursor() as cur:
-        cur.execute("SELECT count(*) FROM core.users")
-        (count,) = cur.fetchone()  # type: ignore[misc]
-    assert count == 0
+        cur.execute("SELECT username FROM core.users ORDER BY username LIMIT 10")
+        usernames = [row[0] for row in cur.fetchall()]
+    # Names the rows rather than reporting a bare count: every historical
+    # failure of this assertion has been a *test fixture* that leaked its
+    # own `fixture-{uuid}` user (a cleanup teardown that died on an aborted
+    # transaction), not a migration that seeded one - and a count alone
+    # cannot tell those two apart.
+    assert usernames == [], (
+        f"core.users must be empty - docs/schemas/user.md: 'No default/seeded user in any "
+        f"migration.' Found {usernames}; a 'fixture-*' name here means a test fixture leaked "
+        f"its user rather than that a migration seeded one."
+    )
 
 
 @pytest.fixture

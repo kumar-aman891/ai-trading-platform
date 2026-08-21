@@ -164,6 +164,20 @@ class SqlAlchemyKillSwitchStateRepository:
                 reason=reason,
             )
             self._session.add(row)
+            # Emit the parent INSERT *before* the history row is added below.
+            # `atp_persistence.models` declares no `relationship()` anywhere
+            # (deliberate house style: plain FK columns only), so SQLAlchemy's
+            # unit of work has no mapper-level dependency by which to order
+            # these two INSERTs and is free to emit the child first - which it
+            # does, violating `fk_kill_switch_history_switch_id_kill_switch_state`
+            # and failing the first-ever transition of every
+            # `STRATEGY:{id}`/`INSTRUMENT:{id}` switch. The seeded switches take
+            # the UPDATE branch below and never hit it, which is why only
+            # `test_apply_transition_creates_a_strategy_switch_on_first_touch`
+            # (against a real database) ever caught this - in-memory fakes
+            # structurally cannot. A flush is not a commit: the caller's
+            # transaction still spans both rows and the ADR-010 audit event.
+            await self._session.flush()
         else:
             row.engaged = new_engaged
             row.updated_at = now

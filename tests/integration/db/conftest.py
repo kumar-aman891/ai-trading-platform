@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -198,11 +199,83 @@ def delete_user_cascade(conn: psycopg.Connection, user_id: str) -> None:
     `audit.audit_events` is deliberately not touched - it is append-only
     (ADR-010) and its rejecting trigger refuses DELETE even for
     `atp_owner`. Audit rows carry no FK to `core.users` (`actor_id` is a
-    plain Text column), so they never block this cleanup."""
+    plain Text column), so they never block this cleanup.
+
+    Rolls back first: this runs as fixture teardown on the *session-scoped*
+    `atp_owner` connection, and a test body that failed mid-transaction leaves
+    that connection in PostgreSQL's `INERROR` state. Without the rollback every
+    statement below raises `InFailedSqlTransaction`, the cleanup is abandoned,
+    and the `core.users` row leaks permanently - surfacing much later as an
+    unrelated failure in
+    `test_risk_config_bootstrap.py::test_no_seeded_core_users_row_exists`
+    rather than anywhere near the test that actually broke. Teardown must not
+    inherit the body's aborted transaction. This hides nothing: the original
+    failure is still reported as that test's own failure."""
+    conn.rollback()
     with conn.cursor() as cur:
         for statement in _DELETE_USER_CASCADE_STATEMENTS:
             cur.execute(statement, (user_id,))
     conn.commit()
+
+
+#: The four `core.kill_switch_state` rows seeded by migration 0001
+#: (`_KILL_SWITCH_SEED_ROWS`). These are the only switches 0001's
+#: `downgrade()` removes *by predicate* (`DELETE FROM core.kill_switch_state
+#: WHERE switch_id = ANY(...)`, before the append-only trigger is dropped and
+#: before any table is dropped); every other switch row is removed only by the
+#: `DROP TABLE` at the end of that same downgrade.
+#:
+#: That asymmetry is why no test may write `core.kill_switch_history` against
+#: one of these ids. History is append-only (ADR-007) and its rejecting trigger
+#: refuses DELETE even for `atp_owner`, so such a row is permanent for the
+#: lifetime of the database - and it holds an FK to the seed row, making that
+#: predicate DELETE fail with `ForeignKeyViolation` from then on. `alembic
+#: downgrade base` is broken for the rest of the session as a result. Use
+#: `existing_test_switch` / `new_test_switch_id()` below instead.
+MIGRATION_SEEDED_SWITCH_IDS = ("API_EXECUTION", "GLOBAL_LIVE", "LIVE_ACCOUNT", "PAPER")
+
+
+def new_test_switch_id() -> str:
+    """A unique, non-migration-seeded `switch_id` safe to write history for."""
+    return f"STRATEGY:it-{uuid.uuid4()}"
+
+
+@pytest.fixture
+def existing_test_switch(owner_connection: psycopg.Connection) -> Iterator[str]:
+    """A disengaged, non-seeded `core.kill_switch_state` row that already
+    exists when the test starts.
+
+    For exercising any "the row is already there" path (e.g.
+    `apply_transition`'s UPDATE branch) without coupling the test to a
+    migration-seeded switch. What selects that branch is the row *existing*,
+    not the row being seeded, so coverage is identical and the test stops
+    mutating state the migration owns.
+    """
+    switch_id = new_test_switch_id()
+    with owner_connection.cursor() as cur:
+        cur.execute(
+            "INSERT INTO core.kill_switch_state (switch_id, engaged, updated_at, "
+            "updated_by, reason) VALUES (%s, false, now(), NULL, NULL)",
+            (switch_id,),
+        )
+    owner_connection.commit()
+
+    yield switch_id
+
+    # Teardown must never attempt a delete the database is designed to reject.
+    # If the test appended history for this switch, that history is append-only
+    # and permanent, and the FK makes the parent row equally permanent - so
+    # delete the state row only when nothing references it. A row left behind
+    # here is harmless: it is not migration-seeded, so `downgrade base` removes
+    # it by `DROP TABLE` rather than by predicate.
+    owner_connection.rollback()
+    with owner_connection.cursor() as cur:
+        cur.execute(
+            "DELETE FROM core.kill_switch_state WHERE switch_id = %s AND NOT EXISTS "
+            "(SELECT 1 FROM core.kill_switch_history h WHERE h.switch_id = %s)",
+            (switch_id, switch_id),
+        )
+    owner_connection.commit()
 
 
 @pytest.fixture(scope="session")

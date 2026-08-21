@@ -16,6 +16,8 @@ from pathlib import Path
 
 import psycopg
 
+from tests.integration.db.conftest import MIGRATION_SEEDED_SWITCH_IDS
+
 _PERSISTENCE_DIR = Path(__file__).resolve().parents[3] / "persistence"
 
 #: The current head revision. Declared once and referenced by every
@@ -91,6 +93,39 @@ def test_upgrade_head_creates_every_expected_table(
 def test_live_schema_has_no_tables(owner_connection: psycopg.Connection) -> None:
     found = _existing_tables(owner_connection, {"live"})
     assert found == set()
+
+
+def test_no_test_wrote_history_against_a_migration_seeded_switch(
+    migrated_database: str, owner_connection: psycopg.Connection
+) -> None:
+    """`core.kill_switch_history` is append-only (ADR-007): its trigger
+    refuses DELETE even for `atp_owner`, so a history row is permanent for
+    the lifetime of the database. Migration 0001's `downgrade()` removes
+    the four seeded `core.kill_switch_state` rows *by predicate*, before
+    that trigger is dropped and before any table is dropped - so a
+    permanent history row holding an FK to a seed row makes `alembic
+    downgrade base` fail from that moment on, for every later test.
+
+    That is a cross-file cascade with an opaque symptom: it surfaces as a
+    `ForeignKeyViolation` inside an alembic subprocess in
+    `test_downgrade_base_then_upgrade_head_is_idempotent` below, nowhere
+    near the test that actually wrote the row. This names the invariant and
+    the offending switch directly instead. Tests must use
+    `existing_test_switch`/`new_test_switch_id()`; a non-seeded switch's
+    history is removed by `DROP TABLE`, which has no such problem."""
+    with owner_connection.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT switch_id FROM core.kill_switch_history "
+            "WHERE switch_id = ANY(%s) ORDER BY switch_id",
+            (list(MIGRATION_SEEDED_SWITCH_IDS),),
+        )
+        offenders = [row[0] for row in cur.fetchall()]
+    assert offenders == [], (
+        f"kill-switch history was written against migration-seeded switch(es) {offenders}. "
+        f"Those rows are append-only and permanently pin the seed row that migration 0001's "
+        f"downgrade() deletes by predicate, breaking `alembic downgrade base`. Use the "
+        f"`existing_test_switch` fixture or `new_test_switch_id()` instead."
+    )
 
 
 def test_downgrade_base_then_upgrade_head_is_idempotent(owner_dsn: str) -> None:
@@ -243,8 +278,20 @@ def test_downgrade_to_0005_then_upgrade_to_0006_restores_proposal_attribution(
 def test_kill_switch_state_seed_rows_present(
     migrated_database: str, owner_connection: psycopg.Connection
 ) -> None:
+    """Scoped to the seeded ids: this asserts the four migration seed rows
+    exist with the right `engaged` values, which is what migration 0001
+    promises. It deliberately does *not* assert the table holds nothing
+    else - tests that exercise `apply_transition`'s first-touch INSERT
+    branch legitimately create `STRATEGY:{id}` rows, and once such a row
+    has append-only history attached it cannot be removed at all. "No
+    other switch exists" was never this test's property to own, and cannot
+    hold in a suite that covers first-touch creation."""
     with owner_connection.cursor() as cur:
-        cur.execute("SELECT switch_id, engaged FROM core.kill_switch_state ORDER BY switch_id")
+        cur.execute(
+            "SELECT switch_id, engaged FROM core.kill_switch_state "
+            "WHERE switch_id = ANY(%s) ORDER BY switch_id",
+            (list(MIGRATION_SEEDED_SWITCH_IDS),),
+        )
         rows = dict(cur.fetchall())
     assert rows == {
         "API_EXECUTION": False,
